@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 add_subdirectory(canbus)
+add_subdirectory_ifdef(CONFIG_DAP dap)
 add_subdirectory(debug)
 add_subdirectory(fb)
 add_subdirectory(fs)
