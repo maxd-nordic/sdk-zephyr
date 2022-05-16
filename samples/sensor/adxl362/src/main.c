@@ -9,6 +9,10 @@
 #include <device.h>
 #include <drivers/sensor.h>
 
+int adxl362_get_status(const struct device *dev, uint8_t *status);
+int adxl362_get_pwrctl(const struct device *dev, uint8_t *status);
+//int adxl362_set_power_mode(const struct device *dev, uint8_t measure_on, uint8_t wakeup, uint8_t autosleep);
+
 K_SEM_DEFINE(sem, 0, 1);
 
 static void trigger_handler(const struct device *dev,
@@ -66,24 +70,41 @@ void main(void)
 			}
 		}
 
-		if (sensor_channel_get(dev, SENSOR_CHAN_ACCEL_X, &accel[0]) < 0) {
+		if (sensor_channel_get(dev, SENSOR_CHAN_ACCEL_XYZ, &accel[0]) < 0) {
 			printf("Channel get error\n");
 			return;
 		}
 
-		if (sensor_channel_get(dev, SENSOR_CHAN_ACCEL_Y, &accel[1]) < 0) {
-			printf("Channel get error\n");
+		uint8_t status = 0;
+		if (adxl362_get_status(dev, &status)) {
+			printf("Status get error\n");
+			return;
+		}
+		uint8_t pwrctl = 0;
+		if (adxl362_get_pwrctl(dev, &pwrctl)) {
+			printf("pwrctl get error\n");
 			return;
 		}
 
-		if (sensor_channel_get(dev, SENSOR_CHAN_ACCEL_Z, &accel[2]) < 0) {
-			printf("Channel get error\n");
-			return;
-		}
-
-		printf("x: %.1f, y: %.1f, z: %.1f (m/s^2)\n",
+		printf("x: % 06.1f, y: % 06.1f, z: % 06.1f (m/s^2), status: %u%u%u%u%u%u%u, pwrctl: %u%u%u%u%u%u%u\r\n",
 		       sensor_value_to_double(&accel[0]),
 		       sensor_value_to_double(&accel[1]),
-		       sensor_value_to_double(&accel[2]));
+		       sensor_value_to_double(&accel[2]),
+			   (status>>7)&1,
+			   (status>>6)&1,
+			   (status>>5)&1,
+			   (status>>4)&1,
+			   (status>>3)&1,
+			   (status>>2)&1,
+			   (status>>1)&1,
+			   (status>>0)&1,
+			   (pwrctl>>7)&1,
+			   (pwrctl>>6)&1,
+			   (pwrctl>>5)&1,
+			   (pwrctl>>4)&1,
+			   (pwrctl>>3)&1,
+			   (pwrctl>>2)&1,
+			   (pwrctl>>1)&1,
+			   (pwrctl>>0)&1);
 	}
 }

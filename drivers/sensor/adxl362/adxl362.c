@@ -112,10 +112,15 @@ static int adxl362_interrupt_config(const struct device *dev,
 	return ret = adxl362_reg_access(dev, ADXL362_WRITE_REG,
 					ADXL362_REG_INTMAP2, &int2, 1);
 }
+#endif
 
 int adxl362_get_status(const struct device *dev, uint8_t *status)
 {
 	return adxl362_get_reg(dev, status, ADXL362_REG_STATUS, 1);
+}
+int adxl362_get_pwrctl(const struct device *dev, uint8_t *status)
+{
+	return adxl362_get_reg(dev, status, ADXL362_REG_POWER_CTL, 1);
 }
 
 int adxl362_clear_data_ready(const struct device *dev)
@@ -124,7 +129,6 @@ int adxl362_clear_data_ready(const struct device *dev)
 	/* Reading any data register clears the data ready interrupt */
 	return adxl362_get_reg(dev, &buf, ADXL362_REG_XDATA, 1);
 }
-#endif
 
 static int adxl362_software_reset(const struct device *dev)
 {
@@ -132,8 +136,12 @@ static int adxl362_software_reset(const struct device *dev)
 			       ADXL362_REG_SOFT_RESET, 1);
 }
 
-static int adxl362_set_power_mode(const struct device *dev, uint8_t mode)
+static int adxl362_set_power_mode(const struct device *dev, uint8_t measure_on, uint8_t wakeup, uint8_t autosleep)
 {
+	__ASSERT_NO_MSG(measure_on <= 1u);
+	__ASSERT_NO_MSG(wakeup <= 1u);
+	__ASSERT_NO_MSG(autosleep <= 1u);
+
 	uint8_t old_power_ctl;
 	uint8_t new_power_ctl;
 	int ret;
@@ -142,11 +150,22 @@ static int adxl362_set_power_mode(const struct device *dev, uint8_t mode)
 	if (ret) {
 		return ret;
 	}
+	LOG_DBG("[old] measure: %d, wakeup: %d, autosleep: %d",
+		old_power_ctl & ADXL362_POWER_CTL_MEASURE(0x3),
+		old_power_ctl & ADXL362_POWER_CTL_WAKEUP,
+		old_power_ctl & ADXL362_POWER_CTL_AUTOSLEEP);
 
-	new_power_ctl = old_power_ctl & ~ADXL362_POWER_CTL_MEASURE(0x3);
+	new_power_ctl = old_power_ctl & ~ADXL362_POWER_CTL_MEASURE(0x3)
+		& ~ADXL362_POWER_CTL_WAKEUP
+		& ~ADXL362_POWER_CTL_AUTOSLEEP;
+
 	new_power_ctl = new_power_ctl |
-		      (mode *
-		       ADXL362_POWER_CTL_MEASURE(ADXL362_MEASURE_ON));
+		      (measure_on * ADXL362_POWER_CTL_MEASURE(ADXL362_MEASURE_ON)) |
+			  (wakeup * ADXL362_POWER_CTL_WAKEUP) |
+			  (autosleep * ADXL362_POWER_CTL_AUTOSLEEP);
+
+	LOG_DBG("[new] measure: %d, wakeup: %d, autosleep: %d", measure_on, wakeup, autosleep);
+
 	return adxl362_set_reg(dev, new_power_ctl, ADXL362_REG_POWER_CTL, 1);
 }
 
@@ -697,7 +716,22 @@ static int adxl362_chip_init(const struct device *dev)
 	}
 
 	/* Places the device into measure mode. */
-	ret = adxl362_set_power_mode(dev, 1);
+	uint8_t autosleep = 0;
+	uint8_t wakeup = 0;
+	uint8_t measure = 0;
+#if defined(CONFIG_ADXL362_WAKEUP_MODE)
+	// The datasheet implies that wake-up mode overrides measure mode.
+	wakeup = 1;
+#endif
+#if defined(CONFIG_ADXL362_MEASUREMENT_MODE)
+	// The datasheet implies that wake-up mode overrides measure mode.
+	measure = 1;
+#endif
+#if defined(CONFIG_ADXL362_AUTOSLEEP)
+	// The datasheet implies that wake-up mode overrides measure mode.
+	autosleep = 1;
+#endif
+	ret = adxl362_set_power_mode(dev, measure, wakeup, autosleep);
 	if (ret) {
 		return ret;
 	}
