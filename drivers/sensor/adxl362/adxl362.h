@@ -196,8 +196,10 @@ struct adxl362_data {
 	struct gpio_callback gpio_cb;
 	struct k_mutex trigger_mutex;
 
-	sensor_trigger_handler_t th_handler;
-	struct sensor_trigger th_trigger;
+	sensor_trigger_handler_t inact_th_handler;
+	struct sensor_trigger inact_th_trigger;
+	sensor_trigger_handler_t act_th_handler;
+	struct sensor_trigger act_th_trigger;
 	sensor_trigger_handler_t drdy_handler;
 	struct sensor_trigger drdy_trigger;
 
