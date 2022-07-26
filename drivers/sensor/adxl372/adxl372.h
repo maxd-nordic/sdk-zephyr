@@ -281,6 +281,8 @@ struct adxl372_xyz_accel_data {
 struct adxl372_data {
 	struct adxl372_xyz_accel_data sample;
 	struct adxl372_fifo_config fifo_config;
+	const struct device *dev;
+	struct k_work_delayable startup_delay;
 
 #ifdef CONFIG_ADXL372_TRIGGER
 	struct gpio_callback gpio_cb;
@@ -289,7 +291,6 @@ struct adxl372_data {
 	struct sensor_trigger th_trigger;
 	sensor_trigger_handler_t drdy_handler;
 	struct sensor_trigger drdy_trigger;
-	const struct device *dev;
 
 #if defined(CONFIG_ADXL372_TRIGGER_OWN_THREAD)
 	K_KERNEL_STACK_MEMBER(thread_stack, CONFIG_ADXL372_THREAD_STACK_SIZE);

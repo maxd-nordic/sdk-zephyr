@@ -27,6 +27,7 @@ static void adxl372_thread_cb(const struct device *dev)
 	if (adxl372_get_status(dev, &status1, &status2, NULL) < 0) {
 		return;
 	}
+	LOG_ERR("ADXL372 TRIGGERED\n");
 
 	if (drv_data->th_handler != NULL) {
 		/* In max peak mode we wait until we settle below the inactivity

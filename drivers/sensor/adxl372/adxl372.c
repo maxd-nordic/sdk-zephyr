@@ -5,6 +5,7 @@
  */
 
 #define DT_DRV_COMPAT adi_adxl372
+#define ADXL372_INSTANT_ON_STARTUP_DELAY K_MSEC(16)
 
 #include <zephyr/kernel.h>
 #include <string.h>
@@ -702,9 +703,15 @@ static int adxl372_sample_fetch(const struct device *dev,
 {
 	struct adxl372_data *data = dev->data;
 	const struct adxl372_dev_config *cfg = dev->config;
-
-	return adxl372_get_accel_data(dev, cfg->max_peak_detect_mode,
+	int result = adxl372_get_accel_data(dev, cfg->max_peak_detect_mode,
 				      &data->sample);
+
+	if (cfg->op_mode == ADXL372_INSTANT_ON) {
+		/* Instant-On mode must be reentered manually after retrieving results. */
+		k_work_reschedule(&data->startup_delay, ADXL372_INSTANT_ON_STARTUP_DELAY);
+	}
+
+	return result;
 }
 
 static void adxl372_accel_convert(struct sensor_value *val, int16_t value)
@@ -876,12 +883,24 @@ static int adxl372_probe(const struct device *dev)
 		return ret;
 	}
 
-	ret = adxl372_set_op_mode(dev, cfg->op_mode);
+	ret = adxl372_set_op_mode(dev, ADXL372_FULL_BW_MEASUREMENT);
 	if (ret) {
 		return ret;
 	}
 
 	return adxl372_set_act_proc_mode(dev, cfg->act_proc_mode);
+}
+
+static void adxl372_enable_instant_on_handler(struct k_work *work)
+{
+	struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+	struct adxl372_data *data = CONTAINER_OF(dwork, struct adxl372_data, startup_delay);
+	const struct device *dev = data->dev;
+
+	int err = adxl372_set_op_mode(dev, ADXL372_INSTANT_ON);
+	if (err) {
+		LOG_ERR("ADXL372: cannot enable instant on mode, err: %d", err);
+	}
 }
 
 static int adxl372_init(const struct device *dev)
@@ -905,6 +924,11 @@ static int adxl372_init(const struct device *dev)
 		return -ENODEV;
 	}
 
+	struct adxl372_data *data = dev->data;
+	k_work_init_delayable(&data->startup_delay, adxl372_enable_instant_on_handler);
+	if (cfg->op_mode == ADXL372_INSTANT_ON) {
+		k_work_reschedule(&data->startup_delay, ADXL372_INSTANT_ON_STARTUP_DELAY);
+	}
 	return 0;
 }
 
@@ -967,7 +991,7 @@ static const struct adxl372_dev_config adxl372_config = {
 	.act_proc_mode = ADXL372_LOOPED,
 #endif
 	.th_mode = ADXL372_INSTANT_ON_LOW_TH,
-	.autosleep = false,
+	.autosleep = DT_INST_PROP(0, autosleep),
 	.wur = ADXL372_WUR_52ms,
 
 	.activity_th.thresh = CONFIG_ADXL372_ACTIVITY_THRESHOLD / 100,
@@ -987,7 +1011,7 @@ static const struct adxl372_dev_config adxl372_config = {
 	.fifo_config.fifo_format = ADXL372_XYZ_PEAK_FIFO,
 	.fifo_config.fifo_samples = 128,
 
-	.op_mode = ADXL372_FULL_BW_MEASUREMENT,
+	.op_mode = DT_INST_PROP(0, instant_on) ? ADXL372_INSTANT_ON: ADXL372_FULL_BW_MEASUREMENT,
 };
 
 DEVICE_DT_INST_DEFINE(0, adxl372_init, NULL,
