@@ -38,22 +38,7 @@ static int wifi_connect(uint32_t mgmt_request, struct net_if *iface,
 		LOG_HEXDUMP_DBG(params->sae_password, params->sae_password_length, "sae");
 	}
 	NET_DBG("ch %u sec %u", params->channel, params->security);
-
-	if ((params->security > WIFI_SECURITY_TYPE_MAX) ||
-	    (params->ssid_length > WIFI_SSID_MAX_LEN) ||
-	    (params->ssid_length == 0U) ||
-	    ((params->security == WIFI_SECURITY_TYPE_PSK ||
-		  params->security == WIFI_SECURITY_TYPE_PSK_SHA256) &&
-	     ((params->psk_length < 8) || (params->psk_length > 64) ||
-	      (params->psk_length == 0U) || !params->psk)) ||
-	    ((params->security == WIFI_SECURITY_TYPE_SAE) &&
-	      ((params->psk_length == 0U) || !params->psk) &&
-		  ((params->sae_password_length == 0U) || !params->sae_password)) ||
-	    ((params->channel != WIFI_CHANNEL_ANY) &&
-	     (params->channel > WIFI_CHANNEL_MAX)) ||
-	    !params->ssid) {
-		return -EINVAL;
-	}
+	
 #ifdef CONFIG_WPA_SUPP
 	return zephyr_supp_connect(dev, params);
 #else
