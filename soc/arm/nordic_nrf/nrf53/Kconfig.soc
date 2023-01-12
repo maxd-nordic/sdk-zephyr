@@ -30,6 +30,10 @@ endchoice
 
 if SOC_NRF5340_CPUAPP
 
+config SOC_CHILD_CORE_DOMAIN
+	string
+	default "CPUNET"
+
 config SOC_DCDC_NRF53X_APP
 	bool
 	help
