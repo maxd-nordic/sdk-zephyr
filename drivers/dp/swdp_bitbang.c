@@ -52,6 +52,10 @@ struct sw_config {
 	void *dout_reg;
 	void *din_reg;
 	void *dnoe_reg;
+	uint32_t clk_port;
+	uint32_t dout_port;
+	uint32_t din_port;
+	uint32_t dnoe_port;
 };
 
 struct sw_cfg_data {
@@ -99,7 +103,7 @@ static ALWAYS_INLINE uint32_t sw_get32bit_parity(uint32_t data)
 
 static ALWAYS_INLINE void pin_delay_asm(uint32_t delay)
 {
-#if defined(CONFIG_SOC_SERIES_NRF52X)
+#if defined(CONFIG_SOC_SERIES_NRF52X) || defined(CONFIG_SOC_FAMILY_LPC)
 	__asm volatile ("movs r3, %[p]\n"
 			".start_%=:\n"
 			"subs r3, #1\n"
@@ -113,34 +117,46 @@ static ALWAYS_INLINE void pin_delay_asm(uint32_t delay)
 #endif
 }
 
-static ALWAYS_INLINE void pin_platform_set(void *base, uint8_t pin)
+static ALWAYS_INLINE void pin_platform_set(void *base, uint32_t port, uint8_t pin)
 {
 #if defined(CONFIG_SOC_SERIES_NRF52X)
 	NRF_GPIO_Type * reg = base;
 
 	reg->OUTSET = BIT(pin);
+#elif defined(CONFIG_SOC_FAMILY_LPC)
+	GPIO_Type *gpio_base = base;
+
+	gpio_base->SET[port] = BIT(pin);
 #else
 #error "Not defined for this SoC family"
 #endif
 }
 
-static ALWAYS_INLINE void pin_platform_clr(void *base, uint8_t pin)
+static ALWAYS_INLINE void pin_platform_clr(void *base, uint32_t port, uint8_t pin)
 {
 #if defined(CONFIG_SOC_SERIES_NRF52X)
 	NRF_GPIO_Type * reg = base;
 
 	reg->OUTCLR = BIT(pin);
+#elif defined(CONFIG_SOC_FAMILY_LPC)
+	GPIO_Type *gpio_base = base;
+
+	gpio_base->CLR[port] = BIT(pin);
 #else
 #error "Not defined for this SoC family"
 #endif
 }
 
-static ALWAYS_INLINE uint32_t pin_platform_get(void *base, uint8_t pin)
+static ALWAYS_INLINE uint32_t pin_platform_get(void *base, uint32_t port, uint8_t pin)
 {
 #if defined(CONFIG_SOC_SERIES_NRF52X)
 	NRF_GPIO_Type * reg = base;
 
 	return ((reg->IN >> pin) & 1);
+#elif defined(CONFIG_SOC_FAMILY_LPC)
+	GPIO_Type *gpio_base = base;
+
+	return ((gpio_base->PIN[port] >> pin) & 1);
 #else
 #error "Not defined for this SoC family"
 #endif
@@ -152,7 +168,7 @@ static ALWAYS_INLINE void pin_swclk_set(const struct device *dev)
 	const struct sw_config *config = dev->config;
 	const struct gpio_dt_spec *dt_spec = &config->clk;
 
-	pin_platform_set(config->clk_reg, dt_spec->pin);
+	pin_platform_set(config->clk_reg, config->clk_port, dt_spec->pin);
 }
 
 /* Set SWCLK DAP hardware output pin to low level */
@@ -161,7 +177,7 @@ static ALWAYS_INLINE void pin_swclk_clr(const struct device *dev)
 	const struct sw_config *config = dev->config;
 	const struct gpio_dt_spec *dt_spec = &config->clk;
 
-	pin_platform_clr(config->clk_reg, dt_spec->pin);
+	pin_platform_clr(config->clk_reg, config->clk_port, dt_spec->pin);
 }
 
 /* Set the SWDIO DAP hardware output pin to high level */
@@ -170,7 +186,7 @@ static ALWAYS_INLINE void pin_swdio_set(const struct device *dev)
 	const struct sw_config *config = dev->config;
 	const struct gpio_dt_spec *dt_spec = &config->dout;
 
-	pin_platform_set(config->dout_reg, dt_spec->pin);
+	pin_platform_set(config->dout_reg, config->dout_port, dt_spec->pin);
 }
 
 /* Set the SWDIO DAP hardware output pin to low level */
@@ -179,7 +195,7 @@ static ALWAYS_INLINE void pin_swdio_clr(const struct device *dev)
 	const struct sw_config *config = dev->config;
 	const struct gpio_dt_spec *dt_spec = &config->dout;
 
-	pin_platform_clr(config->dout_reg, dt_spec->pin);
+	pin_platform_clr(config->dout_reg, config->dout_port, dt_spec->pin);
 }
 
 /* Set the SWDIO DAP hardware output pin to bit level */
@@ -190,9 +206,9 @@ static ALWAYS_INLINE void pin_swdio_out(const struct device *dev,
 	const struct gpio_dt_spec *dt_spec = &config->dout;
 
 	if (bit & 1U) {
-		pin_platform_set(config->dout_reg, dt_spec->pin);
+		pin_platform_set(config->dout_reg, config->dout_port, dt_spec->pin);
 	} else {
-		pin_platform_clr(config->dout_reg, dt_spec->pin);
+		pin_platform_clr(config->dout_reg, config->dout_port, dt_spec->pin);
 	}
 }
 
@@ -202,7 +218,7 @@ static ALWAYS_INLINE uint32_t pin_swdio_in(const struct device *dev)
 	const struct sw_config *config = dev->config;
 	const struct gpio_dt_spec *dt_spec = &config->din;
 
-	return pin_platform_get(config->din_reg, dt_spec->pin);
+	return pin_platform_get(config->din_reg, config->din_port, dt_spec->pin);
 }
 
 /*
@@ -214,7 +230,7 @@ static ALWAYS_INLINE void pin_swdio_out_enable(const struct device *dev)
 	const struct sw_config *config = dev->config;
 	const struct gpio_dt_spec *dt_spec = &config->dnoe;
 
-	pin_platform_set(config->dnoe_reg, dt_spec->pin);
+	pin_platform_set(config->dnoe_reg, config->dnoe_port, dt_spec->pin);
 }
 
 /*
@@ -225,7 +241,7 @@ static ALWAYS_INLINE void pin_swdio_out_disable(const struct device *dev)
 	const struct sw_config *config = dev->config;
 	const struct gpio_dt_spec *dt_spec = &config->dnoe;
 
-	pin_platform_clr(config->dnoe_reg, dt_spec->pin);
+	pin_platform_clr(config->dnoe_reg, config->dnoe_port, dt_spec->pin);
 }
 
 #define SW_CLOCK_CYCLE(dev, delay)			\
@@ -607,6 +623,9 @@ static struct swdp_api swdp_bitbang_api = {
 #define SW_GPIOS_GET_REG(n, gpios)						\
 	INT_TO_POINTER(DT_REG_ADDR(DT_PHANDLE(DT_DRV_INST(n), gpios)))
 
+#define SW_GPIOS_GET_PORT(n, gpios)						\
+	DT_PROP_OR(DT_PHANDLE(DT_DRV_INST(n), gpios), port, 0)
+
 #define SW_DEVICE_DEFINE(n)							\
 	static const struct sw_config sw_cfg_##n = {				\
 		.clk = GPIO_DT_SPEC_INST_GET(n, clk_gpios),			\
@@ -620,6 +639,10 @@ static struct swdp_api swdp_bitbang_api = {
 		.dout_reg = SW_GPIOS_GET_REG(n, dout_gpios),			\
 		.din_reg = SW_GPIOS_GET_REG(n, din_gpios),			\
 		.dnoe_reg = SW_GPIOS_GET_REG(n, dnoe_gpios),			\
+		.clk_port = SW_GPIOS_GET_PORT(n, clk_gpios),			\
+		.dout_port = SW_GPIOS_GET_PORT(n, dout_gpios),			\
+		.din_port = SW_GPIOS_GET_PORT(n, din_gpios),			\
+		.dnoe_port = SW_GPIOS_GET_PORT(n, dnoe_gpios),			\
 	};									\
 										\
 	static struct sw_cfg_data sw_data_##n;					\
