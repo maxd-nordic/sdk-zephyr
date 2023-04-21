@@ -33,6 +33,7 @@ struct dap_context {
 	uint8_t debug_port;
 	uint8_t capabilities;
 	uint16_t pkt_size;
+	dap_vendor_cb_t vendor_cb;
 	struct {
 		/* Idle cycles after transfer */
 		uint8_t idle_cycles;
@@ -734,9 +735,12 @@ static uint16_t dap_writeabort(struct dap_context *const ctx,
 
 /* Process DAP Vendor command request */
 static uint16_t dap_process_vendor_cmd(struct dap_context *const ctx,
-				       const uint8_t *const request,
-				       uint8_t *const response)
+				       const uint8_t *request,
+				       uint8_t *response)
 {
+	if (ctx->vendor_cb) {
+		return ctx->vendor_cb(request, response);
+	}
 	response[0] = ID_DAP_INVALID;
 	return 1U;
 }
@@ -758,7 +762,9 @@ static uint16_t dap_process_cmd(struct dap_context *const ctx,
 
 	LOG_HEXDUMP_DBG(request, 8, "req");
 
-	if ((*request >= ID_DAP_VENDOR0) && (*request <= ID_DAP_VENDOR31)) {
+	if (((*request >= ID_DAP_VENDOR0) && (*request <= ID_DAP_VENDOR31)) ||
+	   ((*request >= ID_DAP_VENDOR_EXT_FIRST) &&
+	   (*request <= ID_DAP_VENDOR_EXT_LAST))) {
 		return dap_process_vendor_cmd(ctx, request, response);
 	}
 
@@ -894,6 +900,12 @@ uint32_t dap_execute_cmd(const uint8_t *request,
 	}
 
 	return dap_process_cmd(&dap_ctx[0], request, response);
+}
+
+int dap_install_vendor_callback(dap_vendor_cb_t cb)
+{
+	dap_ctx[0].vendor_cb = cb;
+	return 0;
 }
 
 int dap_setup(const struct device *const dev)

@@ -55,6 +55,8 @@
 /* DAP Vendor Command IDs */
 #define ID_DAP_VENDOR0				0x80U
 #define ID_DAP_VENDOR31				0x9FU
+#define ID_DAP_VENDOR_EXT_FIRST			0xA0U
+#define ID_DAP_VENDOR_EXT_LAST			0xFEU
 #define ID_DAP_INVALID				0xFFU
 
 /* DAP Status Code */
@@ -111,8 +113,12 @@
 #define DAP_MBMSG_FROM_IFACE			0x1U
 #define DAP_MBMSG_FROM_CONTROLLER		0x2U
 
+typedef int (*dap_vendor_cb_t)(const uint8_t *request,
+				uint8_t *response);
+
 /* Keep it internal until an other interface has been implemented. */
 int dap_setup(const struct device *const dev);
 uint32_t dap_execute_cmd(const uint8_t *request, uint8_t *response);
+int dap_install_vendor_callback(dap_vendor_cb_t cb);
 
 #endif	/* ZEPHYR_INCLUDE_CMSIS_DAP_H_ */
