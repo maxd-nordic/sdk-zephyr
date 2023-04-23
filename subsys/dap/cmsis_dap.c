@@ -149,12 +149,7 @@ static uint16_t dap_connect(struct dap_context *const ctx,
 		LOG_INF("port swd");
 		ctx->debug_port = DAP_PORT_SWD;
 
-		if (atomic_test_and_set_bit(&ctx->state,
-					    DAP_STATE_CONNECTED)) {
-			LOG_ERR("DAP device is already connected");
-			port = DAP_ERROR;
-			break;
-		}
+		atomic_set_bit(&ctx->state, DAP_STATE_CONNECTED);
 
 		api->swdp_port_on(ctx->swdp_dev);
 		break;
