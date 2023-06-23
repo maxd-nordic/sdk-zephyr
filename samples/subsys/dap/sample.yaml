@@ -1,5 +1,5 @@
 sample:
-  name: DAP HID
+  name: DAP USB
 tests:
   sample.dap.hid:
     build_only: true

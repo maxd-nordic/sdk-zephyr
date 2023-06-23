@@ -7,14 +7,20 @@ Overview
 ********
 
 This sample app demonstrates use of a SWDP interface driver and CMSIS DAP
-controller through USB HID interface.
+controller through USB Bulk interface.
 
 Requirements
 ************
 
-This sample requires simple circuit consisting of a few Dual-Supply Bus
-Transceivers connected to Arduino GPIOs, look for ARM microcontroller-based
-Hardware Interface Circuits (HICs) for detailed information.
+This sample supports multiple hardware configurations:
+
+The simplest configuration would be to connect `SWDIO` to `dio`, `SWDCLK` to `clk`
+and optionally `nRESET` to `reset`.
+The optional `noe` pin is used to enable the port, e.g. if the SWD connections are multiplexed.
+
+If you are using bus transceivers and require separate
+input and output pins along with an output-enable pin, set `CONFIG_SWDP_BITBANG_DRIVER_SEPARATE_IN_OUT=y`.
+In this case the `din`, `dout` and `dnoe` pins are used.
 
 Building and Running
 ********************
