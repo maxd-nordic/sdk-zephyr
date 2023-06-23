@@ -21,7 +21,7 @@
 #include <zephyr/kernel.h>
 
 /* Firmware Version */
-#define DAP_FW_VER				"1.10"
+#define DAP_FW_VER				"2.1.0"
 
 /* DAP Command IDs */
 #define ID_DAP_INFO				0x00U
@@ -35,19 +35,30 @@
 #define ID_DAP_WRITE_ABORT			0x08U
 #define ID_DAP_DELAY				0x09U
 #define ID_DAP_RESET_TARGET			0x0AU
+
 #define ID_DAP_SWJ_PINS				0x10U
 #define ID_DAP_SWJ_CLOCK			0x11U
 #define ID_DAP_SWJ_SEQUENCE			0x12U
+
 #define ID_DAP_SWDP_CONFIGURE			0x13U
+#define ID_DAP_SWDP_SEQUENCE			0x1DU
+
 #define ID_DAP_JTAG_SEQUENCE			0x14U
 #define ID_DAP_JTAG_CONFIGURE			0x15U
 #define ID_DAP_JTAG_IDCODE			0x16U
+
 #define ID_DAP_SWO_TRANSPORT			0x17U
 #define ID_DAP_SWO_MODE				0x18U
 #define ID_DAP_SWO_BAUDRATE			0x19U
 #define ID_DAP_SWO_CONTROL			0x1AU
 #define ID_DAP_SWO_STATUS			0x1BU
 #define ID_DAP_SWO_DATA				0x1CU
+
+#define ID_DAP_UART_Transport			0x1FU
+#define ID_DAP_UART_Configure			0x20U
+#define ID_DAP_UART_Control			0x22U
+#define ID_DAP_UART_Status			0x23U
+#define ID_DAP_UART_Transfer			0x21U
 
 #define ID_DAP_QUEUE_COMMANDS			0x7EU
 #define ID_DAP_EXECUTE_COMMANDS			0x7FU
@@ -60,30 +71,36 @@
 #define ID_DAP_INVALID				0xFFU
 
 /* DAP Status Code */
-#define DAP_OK					0U
+#define DAP_OK					0x00U
 #define DAP_ERROR				0xFFU
 
 /* DAP ID */
 #define DAP_ID_VENDOR				0x01U
 #define DAP_ID_PRODUCT				0x02U
 #define DAP_ID_SER_NUM				0x03U
-#define DAP_ID_FW_VER				0x04U
+#define DAP_ID_DAP_FW_VER			0x04U
 #define DAP_ID_DEVICE_VENDOR			0x05U
 #define DAP_ID_DEVICE_NAME			0x06U
+#define DAP_ID_BOARD_VENDOR			0x07U
+#define DAP_ID_BOARD_NAME			0x08U
+#define DAP_ID_PRODUCT_FW_VER			0x09U
 #define DAP_ID_CAPABILITIES			0xF0U
+#define DAP_ID_TIMESTAMP_CLOCK			0xF1U
+#define DAP_ID_UART_RX_BUFFER_SIZE		0xFBU
+#define DAP_ID_UART_TX_BUFFER_SIZE		0xFCU
 #define DAP_ID_SWO_BUFFER_SIZE			0xFDU
 #define DAP_ID_PACKET_COUNT			0xFEU
 #define DAP_ID_PACKET_SIZE			0xFFU
 
 /* DAP Host Status */
-#define DAP_DEBUGGER_CONNECTED			0U
-#define DAP_TARGET_RUNNING			1U
+#define DAP_DEBUGGER_CONNECTED			0x00U
+#define DAP_TARGET_RUNNING			0x01U
 
 /* DAP Port */
-#define DAP_PORT_AUTODETECT			0U
-#define DAP_PORT_DISABLED			0U
-#define DAP_PORT_SWD				1U
-#define DAP_PORT_JTAG				2U
+#define DAP_PORT_AUTODETECT			0x00U
+#define DAP_PORT_DISABLED			0x00U
+#define DAP_PORT_SWD				0x01U
+#define DAP_PORT_JTAG				0x02U
 
 /* DAP transfer request bits */
 #define DAP_TRANSFER_MATCH_VALUE		BIT(4)
@@ -109,9 +126,9 @@
 #define DP_RESEND				0x08U
 #define DP_RDBUFF				0x0CU
 
-#define DAP_MBMSG_REGISTER_IFACE		0x0U
-#define DAP_MBMSG_FROM_IFACE			0x1U
-#define DAP_MBMSG_FROM_CONTROLLER		0x2U
+#define DAP_MBMSG_REGISTER_IFACE		0x00U
+#define DAP_MBMSG_FROM_IFACE			0x01U
+#define DAP_MBMSG_FROM_CONTROLLER		0x02U
 
 typedef int (*dap_vendor_cb_t)(const uint8_t *request,
 				uint8_t *response);

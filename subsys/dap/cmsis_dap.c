@@ -23,8 +23,6 @@
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(dap, CONFIG_DAP_LOG_LEVEL);
 
-const char dap_fw_ver[] = DAP_FW_VER;
-
 #define DAP_STATE_CONNECTED	0
 
 struct dap_context {
@@ -59,29 +57,61 @@ static uint16_t dap_info(struct dap_context *const ctx,
 
 	switch (id) {
 	case DAP_ID_VENDOR:
-		LOG_DBG("ID_VENDOR unsupported");
+		LOG_DBG("ID_VENDOR");
+		memcpy(info, CONFIG_CMSIS_DAP_PROBE_VENDOR, sizeof(CONFIG_CMSIS_DAP_PROBE_VENDOR));
+		length = (uint8_t)sizeof(CONFIG_CMSIS_DAP_PROBE_VENDOR);
 		break;
 	case DAP_ID_PRODUCT:
-		LOG_DBG("ID_PRODUCT unsupported");
+		LOG_DBG("ID_PRODUCT");
+		memcpy(info, CONFIG_CMSIS_DAP_PROBE_NAME, sizeof(CONFIG_CMSIS_DAP_PROBE_NAME));
+		length = (uint8_t)sizeof(CONFIG_CMSIS_DAP_PROBE_NAME);
 		break;
 	case DAP_ID_SER_NUM:
+		/* optional to implement */
 		LOG_DBG("ID_SER_NUM unsupported");
 		break;
-	case DAP_ID_FW_VER:
+	case DAP_ID_DAP_FW_VER:
 		LOG_DBG("ID_FW_VER");
-		memcpy(info, dap_fw_ver, sizeof(dap_fw_ver));
-		length = (uint8_t)sizeof(dap_fw_ver);
+		memcpy(info, DAP_FW_VER, sizeof(DAP_FW_VER));
+		length = (uint8_t)sizeof(DAP_FW_VER);
 		break;
 	case DAP_ID_DEVICE_VENDOR:
-		LOG_DBG("ID_DEVICE_VENDOR unsupported");
+		LOG_DBG("ID_DEVICE_VENDOR");
+		memcpy(info, CONFIG_CMSIS_DAP_DEVICE_VENDOR, sizeof(CONFIG_CMSIS_DAP_DEVICE_VENDOR));
+		length = (uint8_t)sizeof(CONFIG_CMSIS_DAP_DEVICE_VENDOR);
 		break;
 	case DAP_ID_DEVICE_NAME:
-		LOG_DBG("ID_DEVICE_NAME unsupported");
+		LOG_DBG("ID_DEVICE_NAME");
+		memcpy(info, CONFIG_CMSIS_DAP_DEVICE_NAME, sizeof(CONFIG_CMSIS_DAP_DEVICE_NAME));
+		length = (uint8_t)sizeof(CONFIG_CMSIS_DAP_DEVICE_NAME);
+		break;
+	case DAP_ID_BOARD_VENDOR:
+		LOG_DBG("ID_BOARD_VENDOR");
+		memcpy(info, CONFIG_CMSIS_DAP_BOARD_VENDOR, sizeof(CONFIG_CMSIS_DAP_BOARD_VENDOR));
+		length = (uint8_t)sizeof(CONFIG_CMSIS_DAP_BOARD_VENDOR);
+		break;
+	case DAP_ID_BOARD_NAME:
+		memcpy(info, CONFIG_CMSIS_DAP_BOARD_NAME, sizeof(CONFIG_CMSIS_DAP_BOARD_NAME));
+		length = (uint8_t)sizeof(CONFIG_CMSIS_DAP_BOARD_NAME);
+		LOG_DBG("ID_BOARD_NAME");
+		break;
+	case DAP_ID_PRODUCT_FW_VER:
+		/* optional to implement */
+		LOG_DBG("ID_PRODUCT_FW_VER unsupported");
 		break;
 	case DAP_ID_CAPABILITIES:
 		info[0] = ctx->capabilities;
 		LOG_DBG("ID_CAPABILITIES 0x%0x", info[0]);
 		length = 1U;
+		break;
+	case DAP_ID_TIMESTAMP_CLOCK:
+		LOG_DBG("ID_TIMESTAMP_CLOCK unsupported");
+		break;
+	case DAP_ID_UART_RX_BUFFER_SIZE:
+		LOG_DBG("ID_UART_RX_BUFFER_SIZE unsupported");
+		break;
+	case DAP_ID_UART_TX_BUFFER_SIZE:
+		LOG_DBG("ID_UART_TX_BUFFER_SIZE unsupported");
 		break;
 	case DAP_ID_SWO_BUFFER_SIZE:
 		LOG_DBG("ID_SWO_BUFFER_SIZE unsupported");
@@ -209,6 +239,7 @@ static uint16_t dap_delay(struct dap_context *const ctx,
 static uint16_t dap_reset_target(struct dap_context *const ctx,
 				 uint8_t *const response)
 {
+	/* do a device specific reset sequence - optional */
 	response[0] = DAP_OK;
 	response[1] = 0U;
 	LOG_WRN("unsupported");
@@ -226,6 +257,7 @@ static uint16_t dap_swj_pins(struct dap_context *const ctx,
 	uint8_t select = request[1];
 	uint32_t wait = sys_get_le32(&request[2]);
 	uint8_t state;
+	int64_t timout_ticks = k_uptime_ticks() + (CONFIG_SYS_CLOCK_TICKS_PER_SEC / 1000000 * wait);
 
 	if (!atomic_test_bit(&ctx->state, DAP_STATE_CONNECTED)) {
 		LOG_ERR("DAP device is not connected");
@@ -238,10 +270,16 @@ static uint16_t dap_swj_pins(struct dap_context *const ctx,
 		api->swdp_set_pins(ctx->swdp_dev, select, value);
 	}
 
-	/* TODO: implement wait */
-	api->swdp_get_pins(ctx->swdp_dev, &state);
-	LOG_ERR("select 0x%02x, value 0x%02x, wait %u, state 0x%02x",
-		select, value, wait, state);
+	do
+	{
+		api->swdp_get_pins(ctx->swdp_dev, &state);
+		LOG_INF("select 0x%02x, value 0x%02x, wait %u, state 0x%02x",
+			select, value, wait, state);
+		if ((value & select) == (state & select)) {
+			LOG_DBG("swdp_get_pins succeeded before timeout");
+			break;
+		}
+	} while (k_uptime_ticks() - timout_ticks > 0);
 
 	response[0] = state;
 
@@ -570,6 +608,50 @@ static uint16_t dap_transfer(struct dap_context *const ctx,
 	return retval;
 }
 
+static uint16_t dap_swdp_sequence(struct dap_context *const ctx,
+			     const uint8_t *const request,
+			     uint8_t *const response)
+{
+	uint8_t sequence_count = request[0];
+	uint8_t num_cycles;
+	uint32_t num_bytes;
+	const struct swdp_api *api = ctx->swdp_dev->api;
+	const uint8_t *request_data = request + 1;
+	uint8_t *response_data = response + 1;
+	bool input;
+
+	switch (ctx->debug_port) {
+	case DAP_PORT_SWD:
+		response[0] = DAP_OK;
+		break;
+	case DAP_PORT_JTAG:
+	default:
+		LOG_ERR("port unsupported");
+		response[0] = DAP_ERROR;
+		return 1U;
+	}
+
+	for (size_t i = 0; i < sequence_count; ++i) {
+		input = *request_data & 0x80;
+		num_cycles = *request_data & 0x3F;
+		num_bytes = (num_cycles + 7) >> 3; /* rounded up to full bytes */
+		if (num_cycles == 0) {
+			num_cycles = 64;
+		}
+		request_data += 1;
+
+		if (input) {
+			api->swdp_input_sequence(ctx->swdp_dev, num_cycles, response_data);
+			response_data += num_bytes;
+		} else {
+			api->swdp_output_sequence(ctx->swdp_dev, num_cycles, request_data);
+			request_data += num_bytes;
+		}		
+	}
+
+	return response_data - response;
+}
+
 /*
  * Process SWD DAP_TransferBlock command and prepare response.
  * pyOCD counterpart is _encode_transfer_block_data.
@@ -802,6 +884,9 @@ static uint16_t dap_process_cmd(struct dap_context *const ctx,
 	case ID_DAP_SWDP_CONFIGURE:
 		retval = dap_swdp_configure(ctx, request, response);
 		break;
+	case ID_DAP_SWDP_SEQUENCE:
+		retval = dap_swdp_sequence(ctx, request, response);
+		break;
 	case ID_DAP_JTAG_SEQUENCE:
 		LOG_ERR("JTAG sequence unsupported");
 		retval = 1;
@@ -856,6 +941,31 @@ static uint16_t dap_process_cmd(struct dap_context *const ctx,
 		break;
 	case ID_DAP_SWO_DATA:
 		LOG_ERR("SWO Data unsupported");
+		retval = 1;
+		*response = DAP_ERROR;
+		break;
+	case ID_DAP_UART_Transport:
+		LOG_ERR("UART Transport unsupported");
+		retval = 1;
+		*response = DAP_ERROR;
+		break;
+	case ID_DAP_UART_Configure:
+		LOG_ERR("UART Configure unsupported");
+		retval = 1;
+		*response = DAP_ERROR;
+		break;
+	case ID_DAP_UART_Control:
+		LOG_ERR("UART Control unsupported");
+		retval = 1;
+		*response = DAP_ERROR;
+		break;
+	case ID_DAP_UART_Status:
+		LOG_ERR("UART Status unsupported");
+		retval = 1;
+		*response = DAP_ERROR;
+		break;
+	case ID_DAP_UART_Transfer:
+		LOG_ERR("UART Transfer unsupported");
 		retval = 1;
 		*response = DAP_ERROR;
 		break;
@@ -924,8 +1034,9 @@ int dap_setup(const struct device *const dev)
 	dap_ctx[0].transfer.retry_count = 100U;
 	dap_ctx[0].transfer.match_retry = 0U;
 	dap_ctx[0].transfer.match_mask = 0U;
-	dap_ctx[0].capabilities = DAP_SUPPORTS_ATOMIC_COMMANDS |
-				  DAP_DP_SUPPOTS_SWD;
+	dap_ctx[0].capabilities =
+		DAP_SUPPORTS_ATOMIC_COMMANDS |
+		DAP_DP_SUPPOTS_SWD;
 
 	return 0;
 }
