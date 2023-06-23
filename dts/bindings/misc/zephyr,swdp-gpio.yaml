@@ -17,27 +17,26 @@ properties:
 
     dout-gpios:
       type: phandle-array
-      required: true
       description: GPIO pin used for SWDIO output
 
     din-gpios:
       type: phandle-array
-      required: true
       description: GPIO pin used for SWDIO input
 
     dnoe-gpios:
       type: phandle-array
-      required: true
-      description: GPIO pin used for SWDIO NOE output
+      description: GPIO pin used for SWDIO NOE output (DOUT enable)
+
+    dio-gpios:
+      type: phandle-array
+      description: GPIO pin used for SWDIO shared input/output
 
     noe-gpios:
       type: phandle-array
-      required: true
-      description: GPIO pin used for SWD NOE output
+      description: GPIO pin used for SWD NOE output (DIN enable)
 
     reset-gpios:
       type: phandle-array
-      required: true
       description: GPIO pin used for RESET output
 
     port-write-cycles:

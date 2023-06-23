@@ -24,7 +24,18 @@ config SWDP_BITBANG_DRIVER
 	bool "Serial Wire Debug Port bit-bang driver"
 	default y
 	depends on DT_HAS_ZEPHYR_SWDP_GPIO_ENABLED
+	depends on GPIO
 	help
 	  Serial Wire Debug Port bit-bang driver.
+
+if SWDP_BITBANG_DRIVER
+
+config SWDP_BITBANG_DRIVER_SEPARATE_IN_OUT
+	bool "SWDIO is connected through transceiver"
+	default n
+	help
+	  Instead of DIO, DIN, DOUT and DNOE should be defined.
+
+endif # SWDP_BITBANG_DRIVER
 
 endif # DP_DRIVER
