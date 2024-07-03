@@ -1503,6 +1503,16 @@ static int spi_nor_init(const struct device *dev)
 	}
 #endif /* ANY_INST_HAS_HOLD_GPIOS */
 
+#if IS_ENABLED(CONFIG_THINGY91X_STATIC_PARTITIONS_NRF53_EXTERNAL_FLASH) || IS_ENABLED(SB_CONFIG_THINGY91X_STATIC_PARTITIONS_NRF53_EXTERNAL_FLASH)
+	const struct device *gpio_dev = DEVICE_DT_GET(DT_NODELABEL(gpio0));
+	gpio_pin_configure(gpio_dev, 30, GPIO_INPUT | GPIO_PULL_UP); // shared GPIO1
+	while (true) {
+		k_sleep(K_MSEC(100));
+		if (gpio_pin_get(gpio_dev, 30) == 0) {
+			break;
+		}
+	}
+#endif
 	return pm_device_driver_init(dev, spi_nor_pm_control);
 }
 
