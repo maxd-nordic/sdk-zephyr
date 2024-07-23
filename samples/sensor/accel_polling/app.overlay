@@ -1,0 +1,12 @@
+&accelerometer_hp {
+	status = "okay";
+};
+&accelerometer_lp {
+	status = "okay";
+};
+/ {
+	aliases {
+		accel0 = &accelerometer_hp;
+		accel1 = &accelerometer_lp;
+	};
+};

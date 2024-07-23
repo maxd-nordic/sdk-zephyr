@@ -4,11 +4,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-&arduino_i2c {
+&accelerometer_hp {
 	status = "okay";
-
-	bmi270@68 {
-		compatible = "bosch,bmi270";
-		reg = <0x68>;
-	};
 };

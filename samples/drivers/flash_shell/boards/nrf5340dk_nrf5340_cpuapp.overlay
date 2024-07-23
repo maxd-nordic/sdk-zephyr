@@ -1,0 +1,83 @@
+&spi4_default {
+	group1 {
+		psels = <NRF_PSEL(SPIM_SCK, 0, 8)>,
+		<NRF_PSEL(SPIM_MOSI, 0, 9)>,
+		<NRF_PSEL(SPIM_MISO, 0, 10)>;
+	};
+};
+
+&spi4_sleep {
+	group1 {
+		psels = <NRF_PSEL(SPIM_SCK, 0, 8)>,
+		<NRF_PSEL(SPIM_MOSI, 0, 9)>,
+		<NRF_PSEL(SPIM_MISO, 0, 10)>;
+		low-power-enable;
+	};
+};
+
+&uart0 {
+	status = "disabled";
+};
+
+&uart1 {
+	status = "disabled";
+};
+
+&i2c1 {
+	status = "disabled";
+};
+
+&pwm0 {
+	status = "disabled";
+};
+
+&qspi {
+	status = "disabled";
+};
+
+&spi4 {
+	status = "okay";
+	pinctrl-0 = <&spi4_default>;
+	pinctrl-1 = <&spi4_sleep>;
+	pinctrl-names = "default", "sleep";
+	cs-gpios = <&gpio0 2 GPIO_ACTIVE_LOW>; // FLASH_CS
+	flash_ext: GD25LE255E@0 {
+		status = "okay";
+		compatible = "jedec,spi-nor";
+		reg = <0>;
+		spi-max-frequency = <8000000>;
+		size = <268435456>;
+		has-dpd;
+		t-enter-dpd = <3000>;
+		t-exit-dpd = <20000>;
+		sfdp-bfp = [e5 20 f3 ff  ff ff ff 0f  44 eb 08 6b  08 3b 42 bb
+			    fe ff ff ff  ff ff 00 ff  ff ff 42 eb  0c 20 0f 52
+			    10 d8 00 ff  d4 31 a5 fe  84 df 14 4f  ec 62 16 33
+			    7a 75 7a 75  04 b3 d5 5c  19 06 14 00  08 50 00 01];
+		jedec-id = [c8 60 19];
+	};
+};
+
+
+&usbd {
+	compatible = "nordic,nrf-usbd";
+	status = "okay";
+
+	cdc_acm_uart: cdc_acm_uart {
+		compatible = "zephyr,cdc-acm-uart";
+	};
+};
+
+/ {
+	chosen {
+		zephyr,console = &cdc_acm_uart;
+		zephyr,shell-uart = &cdc_acm_uart;
+		zephyr,uart-mcumgr = &cdc_acm_uart;
+		zephyr,bt-mon-uart = &cdc_acm_uart;
+		zephyr,bt-c2h-uart = &cdc_acm_uart;
+		zephyr,bt-hci-ipc = &ipc0;
+		nordic,802154-spinel-ipc = &ipc0;
+		zephyr,ieee802154 = &ieee802154;
+		nordic,pm-ext-flash = &flash_ext;
+	};
+};
