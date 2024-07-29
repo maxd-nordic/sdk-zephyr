@@ -22,6 +22,7 @@
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(main, 4);
 #define DEBUG_INTERVAL_NUM     1000
+#define MAX_FRAME_DURATION_US 10000
 
 #define CONFIG_FIFO_FRAME_SPLIT_NUM 10
 #define CONFIG_FIFO_TX_FRAME_COUNT 3
@@ -63,13 +64,42 @@ static struct audio_source {
 } source_streams[CONFIG_BT_ASCS_ASE_SRC_COUNT];
 static size_t configured_source_stream_count;
 
+static const struct bt_audio_codec_qos_pref qos_pref =
+	BT_AUDIO_CODEC_QOS_PREF(true, BT_GAP_LE_PHY_2M, 0x02, 10, 10000, 40000, 10000, 40000);
+
 #define CONFIG_ENCODER_STACK_SIZE 4096
 #define CONFIG_ENCODER_THREAD_PRIO 3
 K_THREAD_STACK_DEFINE(encoder_thread_stack, CONFIG_ENCODER_STACK_SIZE);
 static struct k_thread encoder_thread_data;
 static k_tid_t encoder_thread_id;
+static struct bt_le_ext_adv *adv;
+static uint8_t unicast_server_addata[] = {
+	BT_UUID_16_ENCODE(BT_UUID_ASCS_VAL), /* ASCS UUID */
+	BT_AUDIO_UNICAST_ANNOUNCEMENT_TARGETED, /* Target Announcement */
+	BT_BYTES_LIST_LE16(AVAILABLE_SINK_CONTEXT),
+	BT_BYTES_LIST_LE16(AVAILABLE_SOURCE_CONTEXT),
+	0x00, /* Metadata length */
+};
 
+static const struct bt_data ad[] = {
+	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
+	BT_DATA_BYTES(BT_DATA_UUID16_ALL, BT_UUID_16_ENCODE(BT_UUID_ASCS_VAL)),
+	BT_DATA(BT_DATA_SVC_DATA16, unicast_server_addata, ARRAY_SIZE(unicast_server_addata)),
+};
 
+static struct k_work_delayable adv_start_work;
+
+static void work_adv_start(struct k_work *work)
+{
+	int ret;
+
+	ret = bt_le_ext_adv_start(adv, BT_LE_EXT_ADV_START_DEFAULT);
+	if (ret) {
+		printk("Failed to start advertising set (ret %d)\n", ret);
+		return 0;
+	}
+
+}
 
 static void encoder_thread(void *arg1, void *arg2, void *arg3)
 {
@@ -85,7 +115,6 @@ static void encoder_thread(void *arg1, void *arg2, void *arg3)
 
 	static uint8_t *encoded_data;
 	static size_t pcm_block_size;
-	static uint32_t test_tone_finite_pos;
 	static int32_t pcm_raw_data_show;
 	while (1) {
 		/* Don't start encoding until the stream needing it has started 
@@ -137,9 +166,50 @@ static void encoder_thread(void *arg1, void *arg2, void *arg3)
 	}
 }
 
+static void connected(struct bt_conn *conn, uint8_t err)
+{
+	char addr[BT_ADDR_LE_STR_LEN];
+
+	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
+
+	if (err != 0) {
+		printk("Failed to connect to %s (%u)\n", addr, err);
+
+		default_conn = NULL;
+		return;
+	}
+
+	printk("Connected: %s\n", addr);
+	default_conn = bt_conn_ref(conn);
+}
+
+static void disconnected(struct bt_conn *conn, uint8_t reason)
+{
+	char addr[BT_ADDR_LE_STR_LEN];
+
+	if (conn != default_conn) {
+		return;
+	}
+
+	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
+
+	printk("Disconnected: %s (reason 0x%02x)\n", addr, reason);
+
+	bt_conn_unref(default_conn);
+	default_conn = NULL;
+	k_work_schedule(&adv_start_work, K_MSEC(10));
+}
+
+BT_CONN_CB_DEFINE(conn_callbacks) = {
+	.connected = connected,
+	.disconnected = disconnected,
+};
+
 int main(void)
 {
 	int ret;
+
+
 	printf("Hello World! %s\n", CONFIG_BOARD_TARGET);
 
 	ret = data_fifo_init(&fifo_rx);
@@ -163,5 +233,37 @@ int main(void)
 		ret = k_thread_name_set(encoder_thread_id, "ENCODER");
 		ERR_CHK(ret);
 	}
+
+	k_work_init_delayable(&adv_start_work, work_adv_start);
+
+
+	ret = bt_enable(NULL);
+	if (ret != 0) {
+		printk("Bluetooth init failed (ret %d)\n", ret);
+		return 0;
+	}
+
+	printk("Bluetooth initialized\n");
+
+	ret = sw_codec_lc3_init(NULL, NULL, MAX_FRAME_DURATION_US);
+	if (ret) {
+		printk("sw_codec_lc3_init failed (ret %d)\n", ret);
+	}
+
+	ret = bt_le_ext_adv_create(BT_LE_EXT_ADV_CONN_NAME, NULL, &adv);
+	if (ret) {
+		printk("Failed to create advertising set (ret %d)\n", ret);
+		return 0;
+	}
+
+	ret = bt_le_ext_adv_set_data(adv, ad, ARRAY_SIZE(ad), NULL, 0);
+	if (ret) {
+		printk("Failed to set advertising data (ret %d)\n", ret);
+		return 0;
+	}
+
+
+	k_work_schedule(&adv_start_work, K_MSEC(10));
+
 	return 0;
 }
