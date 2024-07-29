@@ -9,6 +9,16 @@
 #include "audio_i2s.h"
 #include "macros_common.h"
 
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/byteorder.h>
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/audio/audio.h>
+#include <zephyr/bluetooth/audio/bap.h>
+#include <zephyr/bluetooth/audio/pacs.h>
+#include <zephyr/sys/byteorder.h>
+#include <math.h>
+#include "sw_codec_lc3.h"
+
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(main, 4);
 #define DEBUG_INTERVAL_NUM     1000
@@ -22,6 +32,36 @@ LOG_MODULE_REGISTER(main, 4);
 
 DATA_FIFO_DEFINE(fifo_tx, FIFO_TX_BLOCK_COUNT, WB_UP(BLOCK_SIZE_BYTES));
 DATA_FIFO_DEFINE(fifo_rx, FIFO_RX_BLOCK_COUNT, WB_UP(BLOCK_SIZE_BYTES));
+
+
+#define AVAILABLE_SINK_CONTEXT  (BT_AUDIO_CONTEXT_TYPE_UNSPECIFIED | \
+				 BT_AUDIO_CONTEXT_TYPE_CONVERSATIONAL | \
+				 BT_AUDIO_CONTEXT_TYPE_MEDIA | \
+				 BT_AUDIO_CONTEXT_TYPE_GAME | \
+				 BT_AUDIO_CONTEXT_TYPE_INSTRUCTIONAL)
+
+#define AVAILABLE_SOURCE_CONTEXT (BT_AUDIO_CONTEXT_TYPE_UNSPECIFIED | \
+				  BT_AUDIO_CONTEXT_TYPE_CONVERSATIONAL)
+
+NET_BUF_POOL_FIXED_DEFINE(tx_pool, CONFIG_BT_ASCS_ASE_SRC_COUNT,
+			  BT_ISO_SDU_BUF_SIZE(CONFIG_BT_ISO_TX_MTU),
+			  CONFIG_BT_CONN_TX_USER_DATA_SIZE, NULL);
+
+static const struct bt_audio_codec_cap lc3_codec_cap = BT_AUDIO_CODEC_CAP_LC3(
+	BT_AUDIO_CODEC_CAP_FREQ_16KHZ, BT_AUDIO_CODEC_CAP_DURATION_10,
+	BT_AUDIO_CODEC_CAP_CHAN_COUNT_SUPPORT(1), 40u, 120u, 1u,
+	(BT_AUDIO_CONTEXT_TYPE_CONVERSATIONAL));
+
+static struct bt_conn *default_conn;
+static struct k_work_delayable audio_send_work;
+static struct bt_bap_stream sink_streams[CONFIG_BT_ASCS_ASE_SNK_COUNT];
+static struct audio_source {
+	struct bt_bap_stream stream;
+	uint16_t seq_num;
+	uint16_t max_sdu;
+	size_t len_to_send;
+} source_streams[CONFIG_BT_ASCS_ASE_SRC_COUNT];
+static size_t configured_source_stream_count;
 
 #define CONFIG_ENCODER_STACK_SIZE 4096
 #define CONFIG_ENCODER_THREAD_PRIO 3
