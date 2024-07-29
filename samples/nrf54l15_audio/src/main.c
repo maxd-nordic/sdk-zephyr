@@ -7,7 +7,11 @@
 #include <stdio.h>
 #include "audio_datapath.h"
 #include "audio_i2s.h"
+#include "macros_common.h"
 
+#include <zephyr/logging/log.h>
+LOG_MODULE_REGISTER(main, 4);
+#define DEBUG_INTERVAL_NUM     1000
 
 #define CONFIG_FIFO_FRAME_SPLIT_NUM 10
 #define CONFIG_FIFO_TX_FRAME_COUNT 3
@@ -18,6 +22,80 @@
 
 DATA_FIFO_DEFINE(fifo_tx, FIFO_TX_BLOCK_COUNT, WB_UP(BLOCK_SIZE_BYTES));
 DATA_FIFO_DEFINE(fifo_rx, FIFO_RX_BLOCK_COUNT, WB_UP(BLOCK_SIZE_BYTES));
+
+#define CONFIG_ENCODER_STACK_SIZE 4096
+#define CONFIG_ENCODER_THREAD_PRIO 3
+K_THREAD_STACK_DEFINE(encoder_thread_stack, CONFIG_ENCODER_STACK_SIZE);
+static struct k_thread encoder_thread_data;
+static k_tid_t encoder_thread_id;
+
+
+
+static void encoder_thread(void *arg1, void *arg2, void *arg3)
+{
+	int ret;
+	uint32_t blocks_alloced_num;
+	uint32_t blocks_locked_num;
+
+	int debug_trans_count = 0;
+	size_t encoded_data_size = 0;
+
+	void *tmp_pcm_raw_data[CONFIG_FIFO_FRAME_SPLIT_NUM];
+	char pcm_raw_data[FRAME_SIZE_BYTES];
+
+	static uint8_t *encoded_data;
+	static size_t pcm_block_size;
+	static uint32_t test_tone_finite_pos;
+	static int32_t pcm_raw_data_show;
+	while (1) {
+		/* Don't start encoding until the stream needing it has started 
+		ret = k_poll(&encoder_evt, 1, K_FOREVER);
+		*/
+		/* Get PCM data from I2S */
+		/* Since one audio frame is divided into a number of
+		 * blocks, we need to fetch the pointers to all of these
+		 * blocks before copying it to a continuous area of memory
+		 * before sending it to the encoder
+		 */
+		for (int i = 0; i < CONFIG_FIFO_FRAME_SPLIT_NUM; i++) {
+			ret = data_fifo_pointer_last_filled_get(&fifo_rx, &tmp_pcm_raw_data[i],
+								&pcm_block_size, K_FOREVER);
+			ERR_CHK(ret);
+			memcpy(pcm_raw_data + (i * BLOCK_SIZE_BYTES), tmp_pcm_raw_data[i],
+			       pcm_block_size);
+
+			data_fifo_block_free(&fifo_rx, tmp_pcm_raw_data[i]);
+		}
+		//printf("%d\n", FRAME_SIZE_BYTES);
+		/*
+		if (sw_codec_cfg.encoder.enabled) {
+			ret = sw_codec_encode(pcm_raw_data, FRAME_SIZE_BYTES, &encoded_data,
+					      &encoded_data_size);
+
+			ERR_CHK_MSG(ret, "Encode failed");
+		}
+		*/
+
+		/* Print block usage */
+		if (debug_trans_count == DEBUG_INTERVAL_NUM) {
+			ret = data_fifo_num_used_get(&fifo_rx, &blocks_alloced_num,
+						     &blocks_locked_num);
+			ERR_CHK(ret);
+			//LOG_DBG(COLOR_CYAN "RX alloced: %d, locked: %d" COLOR_RESET,
+			//	blocks_alloced_num, blocks_locked_num);
+			debug_trans_count = 0;
+		} else {
+			debug_trans_count++;
+		}
+		/*
+		if (sw_codec_cfg.encoder.enabled) {
+			streamctrl_send(encoded_data, encoded_data_size,
+					sw_codec_cfg.encoder.num_ch);
+		}
+		STACK_USAGE_PRINT("encoder_thread", &encoder_thread_data);
+		*/
+	}
+}
 
 int main(void)
 {
@@ -35,6 +113,15 @@ int main(void)
 	if (ret) {
 		printf("Failed to start audio datapath\n");
 		return ret;
+	}
+
+	if (encoder_thread_id == NULL) {
+		encoder_thread_id = k_thread_create(
+			&encoder_thread_data, encoder_thread_stack, CONFIG_ENCODER_STACK_SIZE,
+			(k_thread_entry_t)encoder_thread, NULL, NULL, NULL,
+			K_PRIO_PREEMPT(CONFIG_ENCODER_THREAD_PRIO), 0, K_NO_WAIT);
+		ret = k_thread_name_set(encoder_thread_id, "ENCODER");
+		ERR_CHK(ret);
 	}
 	return 0;
 }
