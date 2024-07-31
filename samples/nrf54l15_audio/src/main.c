@@ -97,31 +97,23 @@ static void work_adv_start(struct k_work *work)
 	ret = bt_le_ext_adv_start(adv, BT_LE_EXT_ADV_START_DEFAULT);
 	if (ret) {
 		printk("Failed to start advertising set (ret %d)\n", ret);
-		return 0;
 	}
-}
-
-static uint16_t get_and_incr_seq_num(const struct bt_bap_stream *stream)
-{
-	for (size_t i = 0U; i < configured_source_stream_count; i++) {
-		if (stream == &source_streams[i].stream) {
-			uint16_t seq_num;
-
-			seq_num = source_streams[i].seq_num;
-
-			source_streams[i].seq_num++;
-
-			return seq_num;
-		}
-	}
-
-	printk("Could not find endpoint from stream %p\n", stream);
-
-	return 0;
 }
 
 #include "pcm_stream_channel_modifier.h"
-static uint8_t send_start = 0;
+
+void amplifyPCM(int32_t* pcm_data, int length) {
+    for (int i = 0; i < length; i++) {
+        int64_t temp = (int64_t)pcm_data[i] << 10;
+        if (temp > INT32_MAX) {
+            pcm_data[i] = INT32_MAX;
+        } else if (temp < INT32_MIN) {
+            pcm_data[i] = INT32_MIN;
+        } else {
+            pcm_data[i] = (int32_t)temp;
+        }
+    }
+}
 static void encoder_thread(void *arg1, void *arg2, void *arg3)
 {
 	int ret;
@@ -129,14 +121,11 @@ static void encoder_thread(void *arg1, void *arg2, void *arg3)
 	uint32_t blocks_locked_num;
 
 	int debug_trans_count = 0;
-	size_t encoded_data_size = 0;
 
 	void *tmp_pcm_raw_data[CONFIG_FIFO_FRAME_SPLIT_NUM];
 	char pcm_raw_data[FRAME_SIZE_BYTES];
 
-	static uint8_t *encoded_data;
 	static size_t pcm_block_size;
-	static int32_t pcm_raw_data_show;
 	while (1) {
 		/* Don't start encoding until the stream needing it has started
 		ret = k_poll(&encoder_evt, 1, K_FOREVER);
@@ -166,25 +155,15 @@ static void encoder_thread(void *arg1, void *arg2, void *arg3)
 				       pcm_data_mono_system_sample_rate[0],
 				       pcm_data_mono_system_sample_rate[1], &pcm_raw_data_show);
 
-		ret = sw_codec_lc3_enc_run(pcm_data_mono_system_sample_rate[0],
+		int32_t* pcm_data = (int32_t*)pcm_data_mono_system_sample_rate[0];
+		int length = 160;
+		amplifyPCM(pcm_data, length);
+		ret = sw_codec_lc3_enc_run(pcm_data,
 					   FRAME_SIZE_BYTES / 2, 32000, 0, sizeof(m_encoded_data),
 					   m_encoded_data, &encoded_bytes_written);
 		if (ret) {
 			LOG_INF("Failed to encode LC3 data, ret = %d", ret);
 		}
-		// LOG_HEXDUMP_INF(pcm_data_mono_system_sample_rate[0],
-		// FRAME_SIZE_BYTES/2,"data[0]"); printf("%d\n", FRAME_SIZE_BYTES);
-		/*
-		if (sw_codec_cfg.encoder.enabled) {
-			ret = sw_codec_encode(pcm_raw_data, FRAME_SIZE_BYTES, &encoded_data,
-					      &encoded_data_size);
-
-			ERR_CHK_MSG(ret, "Encode failed");
-		}
-
-		ret = sw_codec_lc3_enc_run(pcm_raw_data, FRAME_SIZE_BYTES, 32000, 0, uint16_t
-		lc3_data_buf_size, uint8_t *const lc3_data, uint16_t *const lc3_data_wr_size);
-		*/
 
 		/* Print block usage */
 		if (debug_trans_count == DEBUG_INTERVAL_NUM) {
@@ -197,15 +176,7 @@ static void encoder_thread(void *arg1, void *arg2, void *arg3)
 		} else {
 			debug_trans_count++;
 		}
-		/*
-		if (sw_codec_cfg.encoder.enabled) {
-			streamctrl_send(encoded_data, encoded_data_size,
-					sw_codec_cfg.encoder.num_ch);
-		}
-		STACK_USAGE_PRINT("encoder_thread", &encoder_thread_data);
-		*/
 
-		static uint8_t buf_data[CONFIG_BT_ISO_TX_MTU];
 		static int i = 0;
 		struct net_buf *buf;
 
@@ -234,8 +205,6 @@ static void encoder_thread(void *arg1, void *arg2, void *arg3)
 }
 
 #define MAX_FRAME_DURATION_US 10000
-
-static int frames_per_sdu;
 
 void print_hex(const uint8_t *ptr, size_t len)
 {
@@ -299,72 +268,6 @@ static void print_qos(const struct bt_audio_codec_qos *qos)
 	printk("QoS: interval %u framing 0x%02x phy 0x%02x sdu %u "
 	       "rtn %u latency %u pd %u\n",
 	       qos->interval, qos->framing, qos->phy, qos->sdu, qos->rtn, qos->latency, qos->pd);
-}
-
-/**
- * @brief Send audio data on timeout
- *
- * This will send an increasing amount of audio data, starting from 1 octet.
- * The data is just mock data, and does not actually represent any audio.
- *
- * First iteration : 0x00
- * Second iteration: 0x00 0x01
- * Third iteration : 0x00 0x01 0x02
- *
- * And so on, until it wraps around the configured MTU (CONFIG_BT_ISO_TX_MTU)
- *
- * @param work Pointer to the work structure
- */
-static void audio_timer_timeout(struct k_work *work)
-{
-	int ret;
-	static uint8_t buf_data[CONFIG_BT_ISO_TX_MTU];
-	static bool data_initialized;
-	struct net_buf *buf;
-
-	if (!data_initialized) {
-		/* TODO: Actually encode some audio data */
-		for (size_t i = 0U; i < ARRAY_SIZE(buf_data); i++) {
-			buf_data[i] = (uint8_t)i;
-		}
-
-		data_initialized = true;
-	}
-
-	/* We configured the sink streams to be first in `streams`, so that
-	 * we can use `stream[i]` to select sink streams (i.e. streams with
-	 * data going to the server)
-	 */
-	for (size_t i = 0; i < configured_source_stream_count; i++) {
-		struct bt_bap_stream *stream = &source_streams[i].stream;
-
-		buf = net_buf_alloc(&tx_pool, K_FOREVER);
-		net_buf_reserve(buf, BT_ISO_CHAN_SEND_RESERVE);
-
-		net_buf_add_mem(buf, buf_data, ++source_streams[i].len_to_send);
-
-		ret = bt_bap_stream_send(stream, buf, get_and_incr_seq_num(stream));
-		if (ret < 0) {
-			printk("Failed to send audio data on streams[%zu] (%p): (%d)\n", i, stream,
-			       ret);
-			net_buf_unref(buf);
-		} else {
-			printk("Sending mock data with len %zu on streams[%zu] (%p)\n",
-			       source_streams[i].len_to_send, i, stream);
-		}
-
-		if (source_streams[i].len_to_send >= source_streams[i].max_sdu) {
-			source_streams[i].len_to_send = 0;
-		}
-	}
-
-	/*
-	#if defined(CONFIG_LIBLC3)
-		k_work_schedule(&audio_send_work, K_USEC(MAX_FRAME_DURATION_US));
-	#else
-		k_work_schedule(&audio_send_work, K_USEC(AUDIO_DATA_TIMEOUT_US));
-	#endif
-	*/
 }
 
 static enum bt_audio_dir stream_dir(const struct bt_bap_stream *stream)
@@ -603,7 +506,6 @@ static void stream_recv(struct bt_bap_stream *stream, const struct bt_iso_recv_i
 static void stream_stopped(struct bt_bap_stream *stream, uint8_t reason)
 {
 	printk("Audio Stream %p stopped with reason 0x%02X\n", stream, reason);
-	send_start = 0;
 }
 
 static void stream_enabled_cb(struct bt_bap_stream *stream)
@@ -621,8 +523,8 @@ static void stream_enabled_cb(struct bt_bap_stream *stream)
 }
 static void stream_started_cb(struct bt_bap_stream *stream)
 {
+	int ret;
 	printk("Audio Stream %p started\n", stream);
-	send_start = 1;
 }
 
 static struct bt_bap_stream_ops stream_ops = {
@@ -782,14 +684,12 @@ static void audio_init()
 	ret = data_fifo_init(&fifo_rx);
 	if (ret) {
 		printf("Failed to initialize TX FIFO\n");
-		return ret;
 	}
 
 	audio_datapath_init();
 	ret = audio_datapath_start(&fifo_rx);
 	if (ret) {
-		printf("Failed to start audio datapath\n");
-		return ret;
+			printf("Failed to start audio datapath\n");
 	}
 
 	if (encoder_thread_id == NULL) {
