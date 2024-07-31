@@ -40,7 +40,9 @@ DATA_FIFO_DEFINE(fifo_rx, FIFO_RX_BLOCK_COUNT, WB_UP(BLOCK_SIZE_BYTES));
 	 BT_AUDIO_CONTEXT_TYPE_INSTRUCTIONAL)
 
 #define AVAILABLE_SOURCE_CONTEXT                                                                   \
-	(BT_AUDIO_CONTEXT_TYPE_UNSPECIFIED | BT_AUDIO_CONTEXT_TYPE_CONVERSATIONAL)
+	(BT_AUDIO_CONTEXT_TYPE_UNSPECIFIED | BT_AUDIO_CONTEXT_TYPE_CONVERSATIONAL |                \
+	 BT_AUDIO_CONTEXT_TYPE_MEDIA | BT_AUDIO_CONTEXT_TYPE_GAME |                                \
+	 BT_AUDIO_CONTEXT_TYPE_INSTRUCTIONAL)
 
 NET_BUF_POOL_FIXED_DEFINE(tx_pool, CONFIG_BT_ASCS_ASE_SRC_COUNT,
 			  BT_ISO_SDU_BUF_SIZE(CONFIG_BT_ISO_TX_MTU),
@@ -48,7 +50,7 @@ NET_BUF_POOL_FIXED_DEFINE(tx_pool, CONFIG_BT_ASCS_ASE_SRC_COUNT,
 
 static const struct bt_audio_codec_cap lc3_codec_cap =
 	BT_AUDIO_CODEC_CAP_LC3(BT_AUDIO_CODEC_CAP_FREQ_16KHZ, BT_AUDIO_CODEC_CAP_DURATION_10,
-			       BT_AUDIO_CODEC_CAP_CHAN_COUNT_SUPPORT(1), 40u, 120u, 1u,
+			       BT_AUDIO_CODEC_CAP_CHAN_COUNT_SUPPORT(1), 40u, 40, 1u,
 			       (BT_AUDIO_CONTEXT_TYPE_CONVERSATIONAL));
 
 static struct bt_conn *default_conn;
@@ -66,7 +68,7 @@ static size_t configured_source_stream_count;
 static const struct bt_audio_codec_qos_pref qos_pref =
 	BT_AUDIO_CODEC_QOS_PREF(true, BT_GAP_LE_PHY_2M, 0x02, 10, 10000, 40000, 10000, 40000);
 
-#define CONFIG_ENCODER_STACK_SIZE  4096
+#define CONFIG_ENCODER_STACK_SIZE  8192
 #define CONFIG_ENCODER_THREAD_PRIO 3
 K_THREAD_STACK_DEFINE(encoder_thread_stack, CONFIG_ENCODER_STACK_SIZE);
 static struct k_thread encoder_thread_data;
@@ -163,6 +165,7 @@ static void encoder_thread(void *arg1, void *arg2, void *arg3)
 		pscm_two_channel_split(pcm_raw_data, FRAME_SIZE_BYTES, 32,
 				       pcm_data_mono_system_sample_rate[0],
 				       pcm_data_mono_system_sample_rate[1], &pcm_raw_data_show);
+
 		ret = sw_codec_lc3_enc_run(pcm_data_mono_system_sample_rate[0],
 					   FRAME_SIZE_BYTES / 2, 32000, 0, sizeof(m_encoded_data),
 					   m_encoded_data, &encoded_bytes_written);
@@ -681,7 +684,7 @@ static int set_location(void)
 	int err;
 
 	if (IS_ENABLED(CONFIG_BT_PAC_SNK_LOC)) {
-		err = bt_pacs_set_location(BT_AUDIO_DIR_SINK, BT_AUDIO_LOCATION_FRONT_CENTER);
+		err = bt_pacs_set_location(BT_AUDIO_DIR_SINK, BT_AUDIO_LOCATION_FRONT_LEFT);
 		if (err != 0) {
 			printk("Failed to set sink location (err %d)\n", err);
 			return err;
@@ -689,8 +692,7 @@ static int set_location(void)
 	}
 
 	if (IS_ENABLED(CONFIG_BT_PAC_SRC_LOC)) {
-		err = bt_pacs_set_location(BT_AUDIO_DIR_SOURCE, (BT_AUDIO_LOCATION_FRONT_LEFT |
-								 BT_AUDIO_LOCATION_FRONT_RIGHT));
+		err = bt_pacs_set_location(BT_AUDIO_DIR_SOURCE, (BT_AUDIO_LOCATION_FRONT_LEFT));
 		if (err != 0) {
 			printk("Failed to set source location (err %d)\n", err);
 			return err;
