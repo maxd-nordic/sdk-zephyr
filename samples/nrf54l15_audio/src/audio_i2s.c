@@ -14,8 +14,6 @@
 
 #define I2S_NL DT_NODELABEL(i2s20)
 
-#define HFCLKAUDIO_12_288_MHZ 0x9BAE
-
 enum audio_i2s_state {
 	AUDIO_I2S_STATE_UNINIT,
 	AUDIO_I2S_STATE_IDLE,
@@ -39,7 +37,7 @@ static nrfx_i2s_config_t cfg = {
 	.format = NRF_I2S_FORMAT_I2S,
 	.alignment = NRF_I2S_ALIGN_LEFT,
 	.ratio = CONFIG_AUDIO_RATIO,
-	.mck_setup = 0xC000000,
+	.mck_setup = 0x22635000,
 	.sample_width = NRF_I2S_SWIDTH_24BIT,
 	.channels = NRF_I2S_CHANNELS_STEREO,
 //	.mck_setup = NRF_I2S_MCK_DISABLED,

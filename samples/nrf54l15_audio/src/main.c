@@ -68,7 +68,7 @@ static size_t configured_source_stream_count;
 static const struct bt_audio_codec_qos_pref qos_pref =
 	BT_AUDIO_CODEC_QOS_PREF(true, BT_GAP_LE_PHY_2M, 0x02, 10, 10000, 40000, 10000, 40000);
 
-#define CONFIG_ENCODER_STACK_SIZE  8192
+#define CONFIG_ENCODER_STACK_SIZE  16000
 #define CONFIG_ENCODER_THREAD_PRIO 3
 K_THREAD_STACK_DEFINE(encoder_thread_stack, CONFIG_ENCODER_STACK_SIZE);
 static struct k_thread encoder_thread_data;
@@ -114,6 +114,10 @@ void amplifyPCM(int32_t* pcm_data, int length) {
         }
     }
 }
+
+#include"sample_rate_converter.h"
+static struct sample_rate_converter_ctx encoder_converters;
+
 static void encoder_thread(void *arg1, void *arg2, void *arg3)
 {
 	int ret;
@@ -145,17 +149,20 @@ static void encoder_thread(void *arg1, void *arg2, void *arg3)
 
 			data_fifo_block_free(&fifo_rx, tmp_pcm_raw_data[i]);
 		}
-		// LOG_INF("got a frame %d", BLOCK_SIZE_BYTES);
-		// LOG_HEXDUMP_INF(pcm_raw_data, FRAME_SIZE_BYTES,"pcm_raw_data");
-		char pcm_data_mono_system_sample_rate[2][640] = {0};
+		char pcm_data_mono_system_sample_rate[2][1920] = {0};
 		uint32_t pcm_raw_data_show;
 		uint8_t m_encoded_data[40];
 		uint16_t encoded_bytes_written;
 		pscm_two_channel_split(pcm_raw_data, FRAME_SIZE_BYTES, 32,
 				       pcm_data_mono_system_sample_rate[0],
 				       pcm_data_mono_system_sample_rate[1], &pcm_raw_data_show);
-
-		int32_t* pcm_data = (int32_t*)pcm_data_mono_system_sample_rate[0];
+		char conversion_buffer[640];
+		size_t output_written;
+		ret = sample_rate_converter_process(&encoder_converters, SAMPLE_RATE_FILTER_SIMPLE, pcm_data_mono_system_sample_rate[0],
+					1920, 48000,
+					conversion_buffer, 640,
+					&output_written, 16000);
+		int32_t * pcm_data = (int32_t*)conversion_buffer;
 		int length = 160;
 		amplifyPCM(pcm_data, length);
 		ret = sw_codec_lc3_enc_run(pcm_data,
@@ -523,7 +530,6 @@ static void stream_enabled_cb(struct bt_bap_stream *stream)
 }
 static void stream_started_cb(struct bt_bap_stream *stream)
 {
-	int ret;
 	printk("Audio Stream %p started\n", stream);
 }
 
