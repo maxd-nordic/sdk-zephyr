@@ -24,7 +24,7 @@ static enum audio_i2s_state state = AUDIO_I2S_STATE_UNINIT;
 
 PINCTRL_DT_DEFINE(I2S_NL);
 
-#define CONFIG_AUDIO_RATIO NRF_I2S_RATIO_96X
+#define CONFIG_AUDIO_RATIO NRF_I2S_RATIO_64X
 
 static nrfx_i2s_t i2s_inst = NRFX_I2S_INSTANCE(20);
 
@@ -37,7 +37,7 @@ static nrfx_i2s_config_t cfg = {
 	.format = NRF_I2S_FORMAT_I2S,
 	.alignment = NRF_I2S_ALIGN_LEFT,
 	.ratio = CONFIG_AUDIO_RATIO,
-	.mck_setup = 0x22635000,
+	.mck_setup = 0x17734000,
 	.sample_width = NRF_I2S_SWIDTH_24BIT,
 	.channels = NRF_I2S_CHANNELS_STEREO,
 //	.mck_setup = NRF_I2S_MCK_DISABLED,
