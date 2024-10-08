@@ -153,9 +153,12 @@ static void encoder_thread(void *arg1, void *arg2, void *arg3)
 		uint32_t pcm_raw_data_show;
 		uint8_t m_encoded_data[40];
 		uint16_t encoded_bytes_written;
+		/*
 		pscm_two_channel_split(pcm_raw_data, FRAME_SIZE_BYTES, 32,
 				       pcm_data_mono_system_sample_rate[0],
 				       pcm_data_mono_system_sample_rate[1], &pcm_raw_data_show);
+					   */
+		memcpy(pcm_data_mono_system_sample_rate[0], pcm_raw_data, 1920);
 		char conversion_buffer[640];
 		size_t output_written;
 		ret = sample_rate_converter_process(&encoder_converters, SAMPLE_RATE_FILTER_SIMPLE, pcm_data_mono_system_sample_rate[0],

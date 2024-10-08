@@ -38,8 +38,8 @@ static nrfx_i2s_config_t cfg = {
 	.alignment = NRF_I2S_ALIGN_LEFT,
 	.ratio = CONFIG_AUDIO_RATIO,
 	.mck_setup = 0x17734000,
-	.sample_width = NRF_I2S_SWIDTH_24BIT,
-	.channels = NRF_I2S_CHANNELS_STEREO,
+	.sample_width = I2S_CONFIG_SWIDTH_SWIDTH_24BitIn32,
+	.channels = NRF_I2S_CHANNELS_LEFT,
 //	.mck_setup = NRF_I2S_MCK_DISABLED,
 };
 
