@@ -43,9 +43,9 @@ int encode_test(int nbytes)
 #endif
 
 #if defined(CONFIG_LIBLC3PLUS)
-#include <lc3plus.h>
-#include "setup_dec_lc3plus.h"
-#include "setup_enc_lc3plus.h"
+#define DISABLE_HR_MODE
+#include "functions.h"
+#include "lc3plus.h"
 uint8_t lc3plus_scratch[LC3PLUS_ENC_MAX_SIZE];
 int encode_test(int nbytes)
 {
@@ -53,7 +53,7 @@ int encode_test(int nbytes)
 	int ret = 0;
 	LC3PLUS_Enc enc = {0};
 
-	ret = lc3plus_enc_init(&enc, 48000, 1, 0, NULL);
+	ret = lc3plus_enc_init(&enc, 48000, 1, NULL);
 	if (ret < 0) {
 		printk("Error initializing encoder\n");
 		return ret;
