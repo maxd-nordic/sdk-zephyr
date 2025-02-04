@@ -80,7 +80,7 @@ int encode_test(int nbytes)
 	}
 
 	for (int i = 0; i < 10; i++) {
-		int16_t* channels[] = {examplechunks_bin + (960*i)};
+		int16_t* channels[] = {(int16_t*)(examplechunks_bin + (960*i))};
 		ret = lc3plus_enc16(enc, channels, lc3_data, &nbytes, lc3plus_scratch);
 		if (ret < 0) {
 			printk("Error encoding frame %d\n", i);
