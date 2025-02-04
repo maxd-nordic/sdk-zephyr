@@ -21,9 +21,9 @@
  */
 static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(LED0_NODE, gpios);
 
-static uint8_t lc3_data[400];
 
 #if defined(CONFIG_LIBLC3)
+static uint8_t lc3_data[400];
 #include <lc3.h>
 static lc3_encoder_mem_48k_t encoder_mem;
 
@@ -46,20 +46,34 @@ int encode_test(int nbytes)
 #define DISABLE_HR_MODE
 #include "functions.h"
 #include "lc3plus.h"
-uint8_t lc3plus_scratch[LC3PLUS_ENC_MAX_SIZE];
+uint8_t encoder_area[LC3PLUS_ENC_MAX_SIZE];
+uint8_t lc3plus_scratch[LC3PLUS_ENC_MAX_SCRATCH_SIZE];
+static uint8_t lc3_data[LC3PLUS_MAX_BYTES];
 int encode_test(int nbytes)
 {
 	int bitrate = 8000*nbytes/10;
 	int ret = 0;
-	LC3PLUS_Enc enc = {0};
+	LC3PLUS_Enc * enc = (LC3PLUS_Enc *)encoder_area;
 
-	ret = lc3plus_enc_init(&enc, 48000, 1, NULL);
+	ret = lc3plus_enc_init(enc, 48000, 1, NULL);
 	if (ret < 0) {
 		printk("Error initializing encoder\n");
 		return ret;
 	}
 
-	ret = lc3plus_enc_set_bitrate(&enc, bitrate);
+	ret = lc3plus_enc_set_frame_dms(enc, 10 * 10);
+	if (ret < 0) {
+		printk("Error setting frame duration\n");
+		return ret;
+	}
+
+	ret = lc3plus_enc_set_ep_mode(enc, LC3PLUS_EP_OFF);
+	if (ret < 0) {
+		printk("Error setting error protection\n");
+		return ret;
+	}
+
+	ret = lc3plus_enc_set_bitrate(enc, bitrate);
 	if (ret < 0) {
 		printk("Error setting bitrate\n");
 		return ret;
@@ -67,7 +81,7 @@ int encode_test(int nbytes)
 
 	for (int i = 0; i < 10; i++) {
 		int16_t* channels[] = {examplechunks_bin + (960*i)};
-		ret = lc3plus_enc16(&enc, channels, lc3_data, &nbytes, lc3plus_scratch);
+		ret = lc3plus_enc16(enc, channels, lc3_data, &nbytes, lc3plus_scratch);
 		if (ret < 0) {
 			printk("Error encoding frame %d\n", i);
 			return ret;
@@ -130,7 +144,6 @@ int main(void)
 		}
 
 		led_state = !led_state;
-		printf("LED state: %s\n", led_state ? "ON" : "OFF");
 		k_msleep(SLEEP_TIME_MS);
 	}
 	return 0;
