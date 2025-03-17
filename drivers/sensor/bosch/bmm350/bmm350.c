@@ -936,6 +936,8 @@ static int bmm350_init(const struct device *dev)
 {
 	int err = 0;
 	struct bmm350_data *data = dev->data;
+	const struct sensor_value odr = {100, 0};
+	const struct sensor_value osr = {2, 0};
 
 	err = bmm350_bus_check(dev);
 	if (err < 0) {
@@ -957,6 +959,11 @@ static int bmm350_init(const struct device *dev)
 
 	/* Assign axis_en with all axis enabled (BMM350_EN_XYZ_MSK) */
 	data->axis_en = BMM350_EN_XYZ_MSK;
+
+	/* Initialize to 100Hz, averaging between 2 samples by default */
+	if (set_mag_odr_osr(dev, &odr, &osr) < 0) {
+		return -EIO;
+	}
 
 	return 0;
 }
