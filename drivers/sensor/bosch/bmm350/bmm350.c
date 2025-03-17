@@ -735,36 +735,34 @@ int8_t bmm350_set_odr_performance(enum bmm350_data_rates odr,
 	uint8_t reg_data = 0;
 	enum bmm350_performance_parameters performance_fix = performance;
 
+	/* Reduce the performance setting when too high for the chosen ODR */
+	if ((odr == BMM350_DATA_RATE_400HZ) && (performance >= BMM350_AVERAGING_2)) {
+		performance_fix = BMM350_NO_AVERAGING;
+	} else if ((odr == BMM350_DATA_RATE_200HZ) && (performance >= BMM350_AVERAGING_4)) {
+		performance_fix = BMM350_AVERAGING_2;
+	} else if ((odr == BMM350_DATA_RATE_100HZ) && (performance >= BMM350_AVERAGING_8)) {
+		performance_fix = BMM350_AVERAGING_4;
+	}
+	if (performance_fix != performance) {
+		LOG_WRN("performance adjusted to %d", performance_fix);
+	}
+
+	/* ODR is an enum taking the generated constants from the register map */
+	reg_data = ((uint8_t)odr & BMM350_ODR_MSK);
+	/* AVG / performance is an enum taking the generated constants from the register map
+		*/
+	reg_data = BMM350_SET_BITS(reg_data, BMM350_AVG, (uint8_t)performance_fix);
+	/* Set PMU command configurations for ODR and performance */
+	rslt = bmm350_reg_write(dev, BMM350_REG_PMU_CMD_AGGR_SET, reg_data);
+	LOG_DBG("odr index %d odr_reg_data 0x%x", odr, reg_data);
+
 	if (rslt == BMM350_OK) {
-		/* Reduce the performance setting when too high for the chosen ODR */
-		if ((odr == BMM350_DATA_RATE_400HZ) && (performance >= BMM350_AVERAGING_2)) {
-			performance_fix = BMM350_NO_AVERAGING;
-		} else if ((odr == BMM350_DATA_RATE_200HZ) && (performance >= BMM350_AVERAGING_4)) {
-			performance_fix = BMM350_AVERAGING_2;
-		} else if ((odr == BMM350_DATA_RATE_100HZ) && (performance >= BMM350_AVERAGING_8)) {
-			performance_fix = BMM350_AVERAGING_4;
-		}
-		if (performance_fix != performance) {
-			LOG_WRN("performance adjusted to %d", performance_fix);
-		}
-
-		/* ODR is an enum taking the generated constants from the register map */
-		reg_data = ((uint8_t)odr & BMM350_ODR_MSK);
-		/* AVG / performance is an enum taking the generated constants from the register map
-		 */
-		reg_data = BMM350_SET_BITS(reg_data, BMM350_AVG, (uint8_t)performance_fix);
-		/* Set PMU command configurations for ODR and performance */
-		rslt = bmm350_reg_write(dev, BMM350_REG_PMU_CMD_AGGR_SET, reg_data);
-		LOG_DBG("odr index %d odr_reg_data 0x%x", odr, reg_data);
-
+		/* Set PMU command configurations to update odr and average */
+		reg_data = BMM350_PMU_CMD_UPD_OAE;
+		/* Set PMU command configuration */
+		rslt = bmm350_reg_write(dev, BMM350_REG_PMU_CMD, reg_data);
 		if (rslt == BMM350_OK) {
-			/* Set PMU command configurations to update odr and average */
-			reg_data = BMM350_PMU_CMD_UPD_OAE;
-			/* Set PMU command configuration */
-			rslt = bmm350_reg_write(dev, BMM350_REG_PMU_CMD, reg_data);
-			if (rslt == BMM350_OK) {
-				k_usleep(BMM350_UPD_OAE_DELAY);
-			}
+			k_usleep(BMM350_UPD_OAE_DELAY);
 		}
 	}
 
