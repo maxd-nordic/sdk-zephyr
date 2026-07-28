@@ -110,6 +110,15 @@
 #define BMI270_INT_IO_CTRL_OUTPUT_EN	BIT(3) /* Output enabled */
 #define BMI270_INT_IO_CTRL_INPUT_EN	BIT(4) /* Input enabled */
 
+/*
+ * BMI270_REG_INT_LATCH (0x55). Bosch's own step_counter_hw_int.c example
+ * explicitly configures this to non-latched; our driver never wrote it at
+ * all before, leaving it at whatever the reset/config-file default is.
+ */
+#define BMI270_INT_LATCH_MASK		BIT(0)
+#define BMI270_INT_NON_LATCHED		0
+#define BMI270_INT_LATCHED		BIT(0)
+
 /* Applies to INT1_MAP_FEAT, INT2_MAP_FEAT, INT_STATUS_0 */
 #define BMI270_INT_MAP_SIG_MOTION        BIT(0)
 #define BMI270_INT_MAP_STEP_COUNTER      BIT(1)
@@ -129,6 +138,58 @@
 #define BMI270_INT_MAP_DATA_ERR_INT2		BIT(7)
 
 #define BMI270_INT_STATUS_ANY_MOTION		BIT(6)
+#define BMI270_INT_STATUS_STEP_COUNTER		BIT(1)
+
+/*
+ * Step-detector/step-counter/step-activity share one enable word at
+ * feature page 6, register 0x32 (= FEATURES_0 (0x30) + BMI270 "STEP_CNT_4"
+ * block start address 0x02, per Bosch's BMI270 Sensor API bmi270.h /
+ * bmi2_defs.h). Bit positions below are derived the same way the existing
+ * ANYMO_2 enable bit was: absolute byte offset within the feature page
+ * (block start + feature's FEAT_EN offset), rounded down to the containing
+ * 16-bit word, with the byte's bit position shifted up by 8 if it lands in
+ * the odd (high) byte of that word:
+ *   - step counter:  FEAT_EN offset 0x01, bit 4  -> word bit 8+4  = 12
+ *   - step detector: FEAT_EN offset 0x01, bit 3  -> word bit 8+3  = 11
+ *   - step activity: FEAT_EN offset 0x01, bit 5  -> word bit 8+5  = 13
+ * NOTE: these offsets come from the upstream Bosch sensor API and have not
+ * been independently verified against the exact config-file blob vendored
+ * in bmi270_config_file.h. Confirm on hardware (SC_OUT_0 incrementing,
+ * interrupt firing) before relying on this in production.
+ */
+#define BMI270_STEP_CNT_FEAT_PAGE		6
+#define BMI270_STEP_CNT_FEAT_ADDR		0x32
+#define BMI270_STEP_CNT_FEAT_EN_STEP_DET	BIT(11)
+#define BMI270_STEP_CNT_FEAT_EN_STEP_COUNT	BIT(12)
+#define BMI270_STEP_CNT_FEAT_EN_STEP_ACT	BIT(13)
+
+/*
+ * Step-counter watermark/reset-counter word: feature page 3, register 0x30
+ * (FEATURES_0 (0x30) + BMI270_STEP_CNT_1_STRT_ADDR (0x00) per Bosch's
+ * bmi270.h). Confirmed against Bosch's official step_counter_hw_int.c
+ * example - watermark_level is a plain runtime-writable field, not
+ * something fixed by the firmware config-file blob. Hardware resolution is
+ * 20 steps per LSB (watermark_level = 1 means "interrupt every 20 steps").
+ * Bit 10 of the same word resets the running count to 0 when set.
+ */
+#define BMI270_STEP_CNT_PARAMS_FEAT_PAGE	3
+#define BMI270_STEP_CNT_PARAMS_FEAT_ADDR	0x30
+#define BMI270_STEP_CNT_WM_LEVEL_MASK		GENMASK(9, 0)
+#define BMI270_STEP_CNT_RST_CNT		BIT(10)
+
+/*
+ * Custom trigger for the on-chip step counter/detector, as requested:
+ * SENSOR_TRIG_PRIV_START + 1 (SENSOR_TRIG_PRIV_START itself is left free
+ * for a possible future sensor-specific trigger).
+ */
+#define BMI270_SENSOR_TRIG_STEP		(SENSOR_TRIG_PRIV_START + 1)
+
+/*
+ * Custom attribute controlling the step-counter watermark (in units of 20
+ * steps, see above). Not tied to a specific channel - pass any channel to
+ * sensor_attr_set(), e.g. SENSOR_CHAN_ALL.
+ */
+#define BMI270_SENSOR_ATTR_STEP_WM	(SENSOR_ATTR_PRIV_START + 1)
 
 #define BMI270_CHIP_ID 0x24
 
@@ -274,11 +335,14 @@ struct bmi270_data {
 	const struct sensor_trigger *motion_trigger;
 	sensor_trigger_handler_t drdy_handler;
 	const struct sensor_trigger *drdy_trigger;
+	sensor_trigger_handler_t step_handler;
+	const struct sensor_trigger *step_trigger;
 	struct gpio_callback int1_cb;
 	struct gpio_callback int2_cb;
 	atomic_t int_flags;
 	uint16_t anymo_1;
 	uint16_t anymo_2;
+	uint16_t step_wm_level;
 
 #if CONFIG_BMI270_TRIGGER_OWN_THREAD
 	struct k_sem trig_sem;
@@ -304,6 +368,8 @@ struct bmi270_feature_config {
 	size_t config_file_len;
 	struct bmi270_feature_reg *anymo_1;
 	struct bmi270_feature_reg *anymo_2;
+	struct bmi270_feature_reg *step_cnt_en;
+	struct bmi270_feature_reg *step_cnt_params;
 };
 
 union bmi270_bus {
@@ -371,5 +437,13 @@ int bmi270_trigger_set(const struct device *dev,
 
 int bmi270_init_interrupts(const struct device *dev);
 #endif
+
+/*
+ * Read the running step count from the on-chip step counter (SC_OUT_0,
+ * a plain 16-bit little-endian register - no feature-page switch needed).
+ * Only meaningful once the step counter feature has been enabled via a
+ * BMI270_SENSOR_TRIG_STEP trigger_set() call.
+ */
+int bmi270_step_count_get(const struct device *dev, uint32_t *count);
 
 #endif /* ZEPHYR_DRIVERS_SENSOR_BMI270_BMI270_H_ */

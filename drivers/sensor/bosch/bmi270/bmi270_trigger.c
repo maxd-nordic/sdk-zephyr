@@ -69,6 +69,12 @@ static void bmi270_thread_cb(const struct device *dev)
 			}
 		}
 
+		if (data->step_handler != NULL) {
+			if (int_status & BMI270_INT_STATUS_STEP_COUNTER) {
+				data->step_handler(dev, data->step_trigger);
+			}
+		}
+
 		k_mutex_unlock(&data->trigger_mutex);
 	}
 
@@ -129,6 +135,39 @@ static int bmi270_feature_reg_write(const struct device *dev,
 		LOG_ERR("bmi270_reg_write (0x%02x) failed: %d", reg->addr, ret);
 		return ret;
 	}
+
+	return 0;
+}
+
+/*
+ * Bosch's own reference API (bmi270_get_sensor_config() / ..._set_sensor_config())
+ * always reads a feature-config word before modifying it, so any bits the
+ * config-file blob has already populated (or bits used by a *different*
+ * feature sharing the same word, e.g. step-activity sharing the step
+ * counter/detector enable word) survive untouched. bmi270_feature_reg_write()
+ * above instead writes from scratch every time. Use this read-modify-write
+ * helper wherever we only mean to touch a subset of a feature word's bits.
+ */
+static int bmi270_feature_reg_read(const struct device *dev,
+			     const struct bmi270_feature_reg *reg,
+			     uint16_t *value)
+{
+	int ret;
+	uint8_t feat_page = reg->page;
+
+	ret = bmi270_reg_write(dev, BMI270_REG_FEAT_PAGE, &feat_page, 1);
+	if (ret < 0) {
+		LOG_ERR("bmi270_reg_write (0x%02x) failed: %d", BMI270_REG_FEAT_PAGE, ret);
+		return ret;
+	}
+
+	ret = bmi270_reg_read(dev, reg->addr, (uint8_t *)value, 2);
+	if (ret < 0) {
+		LOG_ERR("bmi270_reg_read (0x%02x) failed: %d", reg->addr, ret);
+		return ret;
+	}
+
+	LOG_DBG("feature reg[0x%02x]@%d -> 0x%04x", reg->addr, reg->page, *value);
 
 	return 0;
 }
@@ -218,6 +257,46 @@ int bmi270_init_interrupts(const struct device *dev)
 		}
 	}
 
+	if (cfg->int1.port || cfg->int2.port) {
+		uint8_t int_latch = BMI270_INT_NON_LATCHED;
+
+		ret = bmi270_reg_write(dev, BMI270_REG_INT_LATCH, &int_latch, 1);
+		if (ret < 0) {
+			LOG_ERR("failed configuring INT_LATCH (%d)", ret);
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
+/*
+ * INT1_MAP_FEAT is a single shared register: every feature interrupt that
+ * routes to INT1 ORs its bit into the same byte. Recompute the whole byte
+ * from currently-registered handlers instead of blindly overwriting it, so
+ * enabling the step trigger doesn't silently disable any-motion (or vice
+ * versa).
+ */
+static int bmi270_update_int1_map_feat(const struct device *dev)
+{
+	struct bmi270_data *data = dev->data;
+	uint8_t int1_map_feat = 0;
+	int ret;
+
+	if (data->motion_handler != NULL) {
+		int1_map_feat |= BMI270_INT_MAP_ANY_MOTION;
+	}
+
+	if (data->step_handler != NULL) {
+		int1_map_feat |= BMI270_INT_MAP_STEP_COUNTER;
+	}
+
+	ret = bmi270_reg_write(dev, BMI270_REG_INT1_MAP_FEAT, &int1_map_feat, 1);
+	if (ret < 0) {
+		LOG_ERR("failed configuring INT1_MAP_FEAT (%d)", ret);
+		return ret;
+	}
+
 	return 0;
 }
 
@@ -246,19 +325,75 @@ static int bmi270_anymo_config(const struct device *dev, bool enable)
 		return ret;
 	}
 
-	uint8_t int1_map_feat = 0;
+	return bmi270_update_int1_map_feat(dev);
+}
 
-	if (enable) {
-		int1_map_feat |= BMI270_INT_MAP_ANY_MOTION;
+static int bmi270_step_cnt_config(const struct device *dev, bool enable)
+{
+	const struct bmi270_config *cfg = dev->config;
+	struct bmi270_data *data = dev->data;
+	/*
+	 * Step counter and step detector share the same INT_STATUS_0/INT_MAP
+	 * bit, and this same 16-bit word also holds the step-activity enable
+	 * bit (BMI270_STEP_CNT_FEAT_EN_STEP_ACT) - a *different* feature we
+	 * are not touching here. Read-modify-write so we don't clobber it
+	 * (or step-activity's own bits, if the config-file blob or another
+	 * code path ever sets them) when flipping our two bits.
+	 */
+	uint16_t step_word;
+	int ret;
+
+	if ((cfg->feature->step_cnt_en == NULL) || (cfg->feature->step_cnt_params == NULL)) {
+		LOG_ERR("step counter feature registers not defined for this variant");
+		return -ENOTSUP;
 	}
 
-	ret = bmi270_reg_write(dev, BMI270_REG_INT1_MAP_FEAT, &int1_map_feat, 1);
+	ret = bmi270_feature_reg_read(dev, cfg->feature->step_cnt_en, &step_word);
 	if (ret < 0) {
-		LOG_ERR("failed configuring INT1_MAP_FEAT (%d)", ret);
 		return ret;
 	}
 
-	return 0;
+	step_word &= ~(BMI270_STEP_CNT_FEAT_EN_STEP_COUNT | BMI270_STEP_CNT_FEAT_EN_STEP_DET);
+	if (enable) {
+		/*
+		 * Enabling the detector alongside the counter makes the
+		 * interrupt fire on every single step instead of waiting for
+		 * the counter's 20-step watermark - much faster to confirm
+		 * the interrupt path works at all, at the cost of more
+		 * frequent wakeups.
+		 */
+		step_word |= BMI270_STEP_CNT_FEAT_EN_STEP_COUNT | BMI270_STEP_CNT_FEAT_EN_STEP_DET;
+	}
+
+	ret = bmi270_feature_reg_write(dev, cfg->feature->step_cnt_en, step_word);
+	if (ret < 0) {
+		return ret;
+	}
+
+	if (enable) {
+		/*
+		 * Watermark is in units of 20 steps; see bmi270.h for
+		 * details. Read-modify-write: only bits 0-10 (watermark +
+		 * reset-count) are ours; preserve whatever else the
+		 * config-file blob put in the rest of this word.
+		 */
+		uint16_t wm_word;
+
+		ret = bmi270_feature_reg_read(dev, cfg->feature->step_cnt_params, &wm_word);
+		if (ret < 0) {
+			return ret;
+		}
+
+		wm_word &= ~(BMI270_STEP_CNT_WM_LEVEL_MASK | BMI270_STEP_CNT_RST_CNT);
+		wm_word |= FIELD_PREP(BMI270_STEP_CNT_WM_LEVEL_MASK, data->step_wm_level);
+
+		ret = bmi270_feature_reg_write(dev, cfg->feature->step_cnt_params, wm_word);
+		if (ret < 0) {
+			return ret;
+		}
+	}
+
+	return bmi270_update_int1_map_feat(dev);
 }
 
 static int bmi270_drdy_config(const struct device *dev, bool enable)
@@ -287,7 +422,7 @@ int bmi270_trigger_set(const struct device *dev,
 	struct bmi270_data *data = dev->data;
 	const struct bmi270_config *cfg = dev->config;
 
-	switch (trig->type) {
+	switch ((uint32_t)trig->type) {
 	case SENSOR_TRIG_MOTION:
 		if (!cfg->int1.port) {
 			return -ENOTSUP;
@@ -309,6 +444,17 @@ int bmi270_trigger_set(const struct device *dev,
 		data->drdy_trigger = trig;
 		k_mutex_unlock(&data->trigger_mutex);
 		return bmi270_drdy_config(dev, handler != NULL);
+
+	case BMI270_SENSOR_TRIG_STEP:
+		if (!cfg->int1.port) {
+			return -ENOTSUP;
+		}
+
+		k_mutex_lock(&data->trigger_mutex, K_FOREVER);
+		data->step_handler = handler;
+		data->step_trigger = trig;
+		k_mutex_unlock(&data->trigger_mutex);
+		return bmi270_step_cnt_config(dev, handler != NULL);
 	default:
 		return -ENOTSUP;
 	}

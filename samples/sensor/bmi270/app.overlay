@@ -4,11 +4,22 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-&arduino_i2c {
+&bmi270 {
 	status = "okay";
-
-	bmi270@68 {
-		compatible = "bosch,bmi270";
-		reg = <0x68>;
-	};
+	/*
+	 * REQUIRED for the step counter: forces selection of the "base"
+	 * (v2.71.8) config-file blob instead of the default "max_fifo"
+	 * (v2.63.1) one - see BMI270_FEATURE() in bmi270.c. The step-counter
+	 * feature-page offsets in bmi270.h (BMI270_STEP_CNT_FEAT_PAGE/ADDR,
+	 * BMI270_STEP_CNT_PARAMS_FEAT_*) were derived from Bosch's current
+	 * BMI270 Sensor API and only confirmed working against this "base"
+	 * blob on real hardware. The default max_fifo blob (used by every
+	 * other board in this tree, since none of them set
+	 * "bosch,bmi270-base") has a different internal feature memory
+	 * layout - the step counter silently does not work under it with
+	 * the current driver extension. "bosch,bmi270" must stay in the
+	 * compatible list too - it's what the driver's DT_DRV_COMPAT and the
+	 * I2C/SPI bus Kconfig deps match on.
+	 */
+	compatible = "bosch,bmi270-base", "bosch,bmi270";
 };

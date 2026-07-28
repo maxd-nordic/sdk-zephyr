@@ -545,6 +545,21 @@ static int bmi270_channel_get(const struct device *dev, enum sensor_channel chan
 	return 0;
 }
 
+int bmi270_step_count_get(const struct device *dev, uint32_t *count)
+{
+	uint8_t buf[2];
+	int ret;
+
+	ret = bmi270_reg_read(dev, BMI270_REG_SC_OUT_0, buf, sizeof(buf));
+	if (ret != 0) {
+		return ret;
+	}
+
+	*count = sys_get_le16(buf);
+
+	return 0;
+}
+
 #if defined(CONFIG_BMI270_TRIGGER)
 
 /* ANYMO_1.duration conversion is 20 ms / LSB */
@@ -586,12 +601,37 @@ static int bmi270_write_anymo_duration(const struct device *dev, uint32_t ms)
 	data->anymo_1 = val;
 	return 0;
 }
+
+/*
+ * Caches the requested watermark (in units of 20 steps); applied to
+ * hardware the next time the step trigger is (re-)enabled, same pattern as
+ * the any-motion threshold/duration above.
+ */
+static int bmi270_write_step_wm(const struct device *dev, const struct sensor_value *val)
+{
+	struct bmi270_data *data = dev->data;
+
+	if ((val->val1 < 0) || (val->val1 > BMI270_STEP_CNT_WM_LEVEL_MASK)) {
+		LOG_ERR("step watermark out of range (0-%ld)", BMI270_STEP_CNT_WM_LEVEL_MASK);
+		return -EINVAL;
+	}
+
+	data->step_wm_level = (uint16_t)val->val1;
+	return 0;
+}
 #endif /* CONFIG_BMI270_TRIGGER */
 
 static int bmi270_attr_set(const struct device *dev, enum sensor_channel chan,
 			   enum sensor_attribute attr, const struct sensor_value *val)
 {
 	int ret = -ENOTSUP;
+
+#if defined(CONFIG_BMI270_TRIGGER)
+	/* Not tied to a specific channel. */
+	if (attr == BMI270_SENSOR_ATTR_STEP_WM) {
+		return bmi270_write_step_wm(dev, val);
+	}
+#endif
 
 	if ((chan == SENSOR_CHAN_ACCEL_X) || (chan == SENSOR_CHAN_ACCEL_Y)
 	    || (chan == SENSOR_CHAN_ACCEL_Z)
@@ -656,6 +696,8 @@ static int bmi270_init(const struct device *dev)
 #if CONFIG_BMI270_TRIGGER
 	data->dev = dev;
 	k_mutex_init(&data->trigger_mutex);
+	/* Matches Bosch's step_counter_hw_int.c default: interrupt every 20 steps. */
+	data->step_wm_level = 1;
 #endif
 
 	data->acc_odr = BMI270_ACC_ODR_100_HZ;
@@ -784,6 +826,14 @@ static const struct bmi270_feature_config bmi270_feature_max_fifo = {
 	.name = "max_fifo",
 	.config_file = bmi270_config_file_max_fifo,
 	.config_file_len = sizeof(bmi270_config_file_max_fifo),
+	.step_cnt_en = &(struct bmi270_feature_reg){
+		.page = BMI270_STEP_CNT_FEAT_PAGE,
+		.addr = BMI270_STEP_CNT_FEAT_ADDR,
+	},
+	.step_cnt_params = &(struct bmi270_feature_reg){
+		.page = BMI270_STEP_CNT_PARAMS_FEAT_PAGE,
+		.addr = BMI270_STEP_CNT_PARAMS_FEAT_ADDR,
+	},
 };
 
 static const struct bmi270_feature_config bmi270_feature_base = {
@@ -792,6 +842,14 @@ static const struct bmi270_feature_config bmi270_feature_base = {
 	.config_file_len = sizeof(bmi270_config_file_base),
 	.anymo_1 = &(struct bmi270_feature_reg){ .page = 1, .addr = 0x3C },
 	.anymo_2 = &(struct bmi270_feature_reg){ .page = 1, .addr = 0x3E },
+	.step_cnt_en = &(struct bmi270_feature_reg){
+		.page = BMI270_STEP_CNT_FEAT_PAGE,
+		.addr = BMI270_STEP_CNT_FEAT_ADDR,
+	},
+	.step_cnt_params = &(struct bmi270_feature_reg){
+		.page = BMI270_STEP_CNT_PARAMS_FEAT_PAGE,
+		.addr = BMI270_STEP_CNT_PARAMS_FEAT_ADDR,
+	},
 };
 
 #define BMI270_FEATURE(inst) (						\
