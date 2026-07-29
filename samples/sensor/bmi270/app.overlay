@@ -7,19 +7,29 @@
 &bmi270 {
 	status = "okay";
 	/*
-	 * REQUIRED for the step counter: forces selection of the "base"
-	 * (v2.71.8) config-file blob instead of the default "max_fifo"
-	 * (v2.63.1) one - see BMI270_FEATURE() in bmi270.c. The step-counter
-	 * feature-page offsets in bmi270.h (BMI270_STEP_CNT_FEAT_PAGE/ADDR,
-	 * BMI270_STEP_CNT_PARAMS_FEAT_*) were derived from Bosch's current
-	 * BMI270 Sensor API and only confirmed working against this "base"
-	 * blob on real hardware. The default max_fifo blob (used by every
-	 * other board in this tree, since none of them set
-	 * "bosch,bmi270-base") has a different internal feature memory
-	 * layout - the step counter silently does not work under it with
-	 * the current driver extension. "bosch,bmi270" must stay in the
-	 * compatible list too - it's what the driver's DT_DRV_COMPAT and the
-	 * I2C/SPI bus Kconfig deps match on.
+	 * REQUIRED for the step counter and activity recognition: forces
+	 * selection of the "context" (v2.86.1) config-file blob instead of
+	 * the default "max_fifo" (v2.63.1) one - see BMI270_FEATURE() in
+	 * bmi270.c. "context" is the only blob variant that supports the
+	 * real BMI2_ACTIVITY_RECOGNITION classifier (still/walking/running/
+	 * on_bicycle/in_vehicle/tilted, read via FIFO); "base" (previously
+	 * used here) and the default "max_fifo" only support a much cruder,
+	 * unverified step-activity register guess (see
+	 * bmi270_step_activity_get() in bmi270.h) instead.
+	 *
+	 * The step-counter feature-page offsets in bmi270.h
+	 * (BMI270_STEP_CNT_FEAT_ADDR, BMI270_STEP_CNT_PARAMS_FEAT_ADDR, and
+	 * this variant's own BMI270_CONTEXT_STEP_CNT_FEAT_PAGE/
+	 * _PARAMS_FEAT_PAGE) were derived from Bosch's current BMI270 Sensor
+	 * API (bmi270_context.c) and confirmed working against "base" on
+	 * real hardware - "context" reuses the identical byte offsets on
+	 * different pages, per that same source. The default max_fifo blob
+	 * (used by every other board in this tree, since none of them set
+	 * "bosch,bmi270-base"/"-context") has a different internal feature
+	 * memory layout entirely - the step counter silently does not work
+	 * under it with the current driver extension. "bosch,bmi270" must
+	 * stay in the compatible list too - it's what the driver's
+	 * DT_DRV_COMPAT and the I2C/SPI bus Kconfig deps match on.
 	 */
-	compatible = "bosch,bmi270-base", "bosch,bmi270";
+	compatible = "bosch,bmi270-context", "bosch,bmi270";
 };

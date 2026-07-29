@@ -49,6 +49,7 @@
 #define BMI270_REG_FIFO_DOWNS      0x45
 #define BMI270_REG_FIFO_WTM_0      0x46
 #define BMI270_REG_FIFO_CONFIG_0   0x48
+#define BMI270_REG_FIFO_CONFIG_1   0x49
 #define BMI270_REG_SATURATION      0x4A
 #define BMI270_REG_AUX_DEV_ID      0x4B
 #define BMI270_REG_AUX_IF_CONF     0x4C
@@ -139,6 +140,12 @@
 
 #define BMI270_INT_STATUS_ANY_MOTION		BIT(6)
 #define BMI270_INT_STATUS_STEP_COUNTER		BIT(1)
+/*
+ * Step-activity (still/walking/running classifier) has its OWN interrupt
+ * status bit, separate from the step counter/detector - it fires on a
+ * classification *change*, not on every step.
+ */
+#define BMI270_INT_STATUS_ACTIVITY		BIT(2)
 
 /*
  * Step-detector/step-counter/step-activity share one enable word at
@@ -178,11 +185,125 @@
 #define BMI270_STEP_CNT_RST_CNT		BIT(10)
 
 /*
+ * INT1_MAP_FEAT/INT_STATUS_0 bit used for the step counter/detector. This is
+ * per-variant: base/max_fifo have a sig-motion feature occupying bit 0, so
+ * step counter/detector lands on bit 1 (BMI270_INT_MAP_STEP_COUNTER above).
+ * The "context" blob has no sig-motion feature, so its step counter/detector
+ * moves down to bit 0 instead - confirmed from bmi270_context.c's internal
+ * feature-to-interrupt-bit table, not just carried over from base/max_fifo.
+ */
+#define BMI270_STEP_CNT_INT_BIT_DEFAULT	BMI270_INT_MAP_STEP_COUNTER
+#define BMI270_CONTEXT_STEP_CNT_INT_BIT	BIT(0)
+
+/*
+ * "context" config-file variant (v2.86.1, see bmi270_config_file.h) - unlike
+ * base/max_fifo, its feature memory layout puts the step counter/detector
+ * enable word and the step-counter-params (watermark) word on different
+ * pages than base/max_fifo use. The byte offsets within those pages
+ * (BMI270_STEP_CNT_FEAT_ADDR / BMI270_STEP_CNT_PARAMS_FEAT_ADDR above) are
+ * numerically identical though - confirmed against bmi270_context.c's
+ * feature I/O table.
+ */
+#define BMI270_CONTEXT_STEP_CNT_FEAT_PAGE		4
+#define BMI270_CONTEXT_STEP_CNT_PARAMS_FEAT_PAGE	1
+
+/*
+ * "context"-only feature: BMI2_ACTIVITY_RECOGNITION (still/walking/running/
+ * on_bicycle/in_vehicle/tilted classifier). Unlike the step-activity guess
+ * used by base/max_fifo (BMI270_STEP_CNT_FEAT_EN_STEP_ACT, a plain polled
+ * register), this is read out via FIFO virtual frames - see
+ * BMI270_FIFO_HEADER_ACT_RECOG_FRM below - and has NO associated hardware
+ * interrupt at all (bmi270_context_map_feat_int() in Bosch's API only maps
+ * step counter/detector to INT1/INT2). Enable bit is at byte offset
+ * start_addr directly (no +1 like the step-counter word), bit 0 - confirmed
+ * from bmi270_context.c's set_act_recog().
+ */
+#define BMI270_CONTEXT_ACT_RECOG_FEAT_PAGE	5
+#define BMI270_CONTEXT_ACT_RECOG_FEAT_ADDR	0x3A
+#define BMI270_CONTEXT_ACT_RECOG_EN_MASK	BIT(0)
+
+/*
+ * FIFO_CONFIG is a 16-bit register spanning two 8-bit addresses
+ * (BMI270_REG_FIFO_CONFIG_0 = LSB, BMI270_REG_FIFO_CONFIG_1 = MSB). Header
+ * mode (BMI2_FIFO_HEADER_EN = 0x1000 in Bosch's bmi2_defs.h) is bit 12
+ * overall = bit 4 of the MSB byte. Needed so activity-recognition virtual
+ * frames in the FIFO are distinguishable by a header byte instead of being
+ * indistinguishable raw sensor data.
+ */
+#define BMI270_FIFO_CONFIG_1_HEADER_EN		BIT(4)
+
+/*
+ * FIFO frame header bytes (top of a byte written into the FIFO stream ahead
+ * of that frame's payload). BMI270_FIFO_HEADER_ACT_RECOG_FRM is Bosch's
+ * BMI2_FIFO_VIRT_ACT_RECOG_FRM; the 6-byte payload that follows it is a
+ * 4-byte little-endian timestamp, then prev_act, then curr_act (confirmed
+ * from bmi270_context.c's unpack_act_recog_output()).
+ * BMI270_FIFO_HEADER_EMPTY_FRM marks "no more valid data" at the end of
+ * whatever was read out of the FIFO.
+ */
+#define BMI270_FIFO_HEADER_ACT_RECOG_FRM	0xC8
+#define BMI270_FIFO_HEADER_EMPTY_FRM		0x80
+#define BMI270_FIFO_ACT_RECOG_FRM_LEN		7 /* 1 header byte + 6 payload bytes */
+
+/*
+ * Activity classes as reported by BMI2_ACTIVITY_RECOGNITION, per Bosch's
+ * enum bmi2_act_recog_type (bmi2_defs.h) - numeric values matter here, this
+ * is exactly what the chip puts in the curr_act/prev_act payload bytes.
+ * Naming for 0-5 taken from the user-supplied
+ * `activity_reg_output[6] = {"OTHERS","STILL","WALKING","RUNNING",
+ * "ON_BICYCLE","IN_VEHICLE"}`; BMI270_ACTIVITY_TILTED (6) is Bosch's, not in
+ * that 6-entry list - callers indexing a display name table by this enum
+ * should size it for 7 entries.
+ */
+enum bmi270_activity_recog {
+	BMI270_ACTIVITY_OTHERS = 0,
+	BMI270_ACTIVITY_STILL = 1,
+	BMI270_ACTIVITY_WALKING = 2,
+	BMI270_ACTIVITY_RUNNING = 3,
+	BMI270_ACTIVITY_ON_BICYCLE = 4,
+	BMI270_ACTIVITY_IN_VEHICLE = 5,
+	BMI270_ACTIVITY_TILTED = 6,
+};
+
+/*
  * Custom trigger for the on-chip step counter/detector, as requested:
  * SENSOR_TRIG_PRIV_START + 1 (SENSOR_TRIG_PRIV_START itself is left free
  * for a possible future sensor-specific trigger).
  */
 #define BMI270_SENSOR_TRIG_STEP		(SENSOR_TRIG_PRIV_START + 1)
+
+/*
+ * Custom trigger for the on-chip step-activity classifier (still/walking/
+ * running). Fires on a classification change, not per-step.
+ */
+#define BMI270_SENSOR_TRIG_ACTIVITY	(SENSOR_TRIG_PRIV_START + 2)
+
+/*
+ * BMI270_REG_WR_GEST_ACT (0x20) - "Wrist Gesture + ACTivity" combined
+ * output register. Per Bosch's bmi270.h, the step-activity output lives at
+ * feature-output offset BMI270_STEP_ACT_OUT_STRT_ADDR (0x04) while wrist
+ * gesture is at offset 0x06 - both packed into this one byte rather than
+ * two separate top-level registers like SC_OUT_0.
+ *
+ * UNVERIFIED: the exact bit range for the activity value within this byte
+ * is a best-effort guess (bits[1:0], the most common Bosch activity-code
+ * convention: 0=still, 1=walking, 2=running, 3=invalid) - I could not
+ * confirm it against Bosch's internal bmi2_common.c extraction tables from
+ * headers alone. bmi270_step_activity_get() returns the *raw* byte as well
+ * as the decoded guess specifically so this can be checked empirically:
+ * read the raw value standing still, then walking, then running/shaking,
+ * and confirm which bits actually change. Adjust
+ * BMI270_STEP_ACTIVITY_*_MASK/POS below if the raw byte doesn't match.
+ */
+#define BMI270_STEP_ACTIVITY_MASK	GENMASK(1, 0)
+#define BMI270_STEP_ACTIVITY_POS	0
+
+enum bmi270_step_activity {
+	BMI270_STEP_ACTIVITY_STILL = 0,
+	BMI270_STEP_ACTIVITY_WALKING = 1,
+	BMI270_STEP_ACTIVITY_RUNNING = 2,
+	BMI270_STEP_ACTIVITY_INVALID = 3,
+};
 
 /*
  * Custom attribute controlling the step-counter watermark (in units of 20
@@ -337,12 +458,27 @@ struct bmi270_data {
 	const struct sensor_trigger *drdy_trigger;
 	sensor_trigger_handler_t step_handler;
 	const struct sensor_trigger *step_trigger;
+	sensor_trigger_handler_t activity_handler;
+	const struct sensor_trigger *activity_trigger;
 	struct gpio_callback int1_cb;
 	struct gpio_callback int2_cb;
 	atomic_t int_flags;
 	uint16_t anymo_1;
 	uint16_t anymo_2;
 	uint16_t step_wm_level;
+
+	/*
+	 * "context" variant activity recognition: no hardware interrupt
+	 * exists for this feature, so it's driven by periodically polling
+	 * the FIFO instead (see activity_poll_work in bmi270_trigger.c).
+	 * activity_curr/prev/timestamp cache the latest decoded frame,
+	 * protected by trigger_mutex like the rest of this struct.
+	 */
+	struct k_work_delayable activity_poll_work;
+	enum bmi270_activity_recog activity_curr;
+	enum bmi270_activity_recog activity_prev;
+	uint32_t activity_timestamp;
+	bool activity_data_valid;
 
 #if CONFIG_BMI270_TRIGGER_OWN_THREAD
 	struct k_sem trig_sem;
@@ -370,6 +506,20 @@ struct bmi270_feature_config {
 	struct bmi270_feature_reg *anymo_2;
 	struct bmi270_feature_reg *step_cnt_en;
 	struct bmi270_feature_reg *step_cnt_params;
+	/*
+	 * INT1_MAP_FEAT/INT_STATUS_0 bit for the step counter/detector -
+	 * per-variant, see BMI270_STEP_CNT_INT_BIT_DEFAULT /
+	 * BMI270_CONTEXT_STEP_CNT_INT_BIT.
+	 */
+	uint8_t step_cnt_int_bit;
+	/*
+	 * Only non-NULL for the "context" blob: enable bit for the real
+	 * BMI2_ACTIVITY_RECOGNITION feature (FIFO-based, no interrupt). NULL
+	 * for base/max_fifo, which instead (mis)use step_cnt_en's
+	 * BMI270_STEP_CNT_FEAT_EN_STEP_ACT bit - see bmi270_activity_config()
+	 * in bmi270_trigger.c for how this selects between the two.
+	 */
+	struct bmi270_feature_reg *act_recog_en;
 };
 
 union bmi270_bus {
@@ -445,5 +595,31 @@ int bmi270_init_interrupts(const struct device *dev);
  * BMI270_SENSOR_TRIG_STEP trigger_set() call.
  */
 int bmi270_step_count_get(const struct device *dev, uint32_t *count);
+
+/*
+ * Read the step-activity classifier output (BMI270_REG_WR_GEST_ACT). Only
+ * meaningful once enabled via a BMI270_SENSOR_TRIG_ACTIVITY trigger_set()
+ * call. Returns the raw register byte in *raw (for empirically checking the
+ * bit-decode - see the comment above BMI270_STEP_ACTIVITY_MASK) and the
+ * best-effort decoded classification in *activity.
+ */
+int bmi270_step_activity_get(const struct device *dev, uint8_t *raw,
+			     enum bmi270_step_activity *activity);
+
+#ifdef CONFIG_BMI270_TRIGGER
+/*
+ * Read the latest BMI2_ACTIVITY_RECOGNITION classification ("context" blob
+ * only - see struct bmi270_feature_config::act_recog_en). Unlike
+ * bmi270_step_activity_get(), this isn't tied to a polled register: the
+ * driver maintains *curr/*prev/*timestamp by periodically draining the
+ * FIFO in the background once a BMI270_SENSOR_TRIG_ACTIVITY trigger_set()
+ * call enables it. Returns -EAGAIN if no frame has been decoded yet.
+ * Any of curr/prev/timestamp may be NULL if not needed.
+ */
+int bmi270_activity_recognition_get(const struct device *dev,
+				    enum bmi270_activity_recog *curr,
+				    enum bmi270_activity_recog *prev,
+				    uint32_t *timestamp);
+#endif
 
 #endif /* ZEPHYR_DRIVERS_SENSOR_BMI270_BMI270_H_ */

@@ -560,6 +560,29 @@ int bmi270_step_count_get(const struct device *dev, uint32_t *count)
 	return 0;
 }
 
+int bmi270_step_activity_get(const struct device *dev, uint8_t *raw,
+			     enum bmi270_step_activity *activity)
+{
+	uint8_t reg;
+	int ret;
+
+	ret = bmi270_reg_read(dev, BMI270_REG_WR_GEST_ACT, &reg, 1);
+	if (ret != 0) {
+		return ret;
+	}
+
+	if (raw != NULL) {
+		*raw = reg;
+	}
+
+	if (activity != NULL) {
+		*activity = (enum bmi270_step_activity)
+			FIELD_GET(BMI270_STEP_ACTIVITY_MASK, reg);
+	}
+
+	return 0;
+}
+
 #if defined(CONFIG_BMI270_TRIGGER)
 
 /* ANYMO_1.duration conversion is 20 ms / LSB */
@@ -834,6 +857,7 @@ static const struct bmi270_feature_config bmi270_feature_max_fifo = {
 		.page = BMI270_STEP_CNT_PARAMS_FEAT_PAGE,
 		.addr = BMI270_STEP_CNT_PARAMS_FEAT_ADDR,
 	},
+	.step_cnt_int_bit = BMI270_STEP_CNT_INT_BIT_DEFAULT,
 };
 
 static const struct bmi270_feature_config bmi270_feature_base = {
@@ -850,9 +874,44 @@ static const struct bmi270_feature_config bmi270_feature_base = {
 		.page = BMI270_STEP_CNT_PARAMS_FEAT_PAGE,
 		.addr = BMI270_STEP_CNT_PARAMS_FEAT_ADDR,
 	},
+	.step_cnt_int_bit = BMI270_STEP_CNT_INT_BIT_DEFAULT,
+};
+
+/*
+ * "context" (v2.86.1) config-file blob - unlike base/max_fifo, this variant
+ * supports the real BMI2_ACTIVITY_RECOGNITION classifier (still/walking/
+ * running/on_bicycle/in_vehicle/tilted, read via FIFO - see
+ * bmi270_activity_config() in bmi270_trigger.c) instead of the unverified
+ * register-guess used by the other two. Its step counter/detector and
+ * step-counter-params words also live on different pages than base/max_fifo
+ * (page 4 / page 1 instead of page 6 / page 3) and its step counter shares
+ * INT1_MAP_FEAT/INT_STATUS_0 bit 0 instead of bit 1, since context has no
+ * sig-motion feature occupying bit 0. All of this is confirmed directly
+ * from bmi270_context.c/.h's own feature I/O tables, not carried over from
+ * base/max_fifo by assumption.
+ */
+static const struct bmi270_feature_config bmi270_feature_context = {
+	.name = "context",
+	.config_file = bmi270_config_file_context,
+	.config_file_len = sizeof(bmi270_config_file_context),
+	.step_cnt_en = &(struct bmi270_feature_reg){
+		.page = BMI270_CONTEXT_STEP_CNT_FEAT_PAGE,
+		.addr = BMI270_STEP_CNT_FEAT_ADDR,
+	},
+	.step_cnt_params = &(struct bmi270_feature_reg){
+		.page = BMI270_CONTEXT_STEP_CNT_PARAMS_FEAT_PAGE,
+		.addr = BMI270_STEP_CNT_PARAMS_FEAT_ADDR,
+	},
+	.step_cnt_int_bit = BMI270_CONTEXT_STEP_CNT_INT_BIT,
+	.act_recog_en = &(struct bmi270_feature_reg){
+		.page = BMI270_CONTEXT_ACT_RECOG_FEAT_PAGE,
+		.addr = BMI270_CONTEXT_ACT_RECOG_FEAT_ADDR,
+	},
 };
 
 #define BMI270_FEATURE(inst) (						\
+	DT_INST_NODE_HAS_COMPAT(inst, bosch_bmi270_context) ?		\
+		&bmi270_feature_context :				\
 	DT_INST_NODE_HAS_COMPAT(inst, bosch_bmi270_base) ?	        \
 		&bmi270_feature_base :					\
 		&bmi270_feature_max_fifo)

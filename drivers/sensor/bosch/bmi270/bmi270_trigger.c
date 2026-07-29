@@ -6,9 +6,17 @@
 
 #include <zephyr/device.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/byteorder.h>
 LOG_MODULE_DECLARE(bmi270);
 
 #include "bmi270.h"
+
+/*
+ * Poll period for "context"-variant activity recognition (no hardware
+ * interrupt exists for this feature - see BMI270_CONTEXT_ACT_RECOG_FEAT_PAGE
+ * in bmi270.h - so it's drained out of the FIFO on a timer instead).
+ */
+#define BMI270_ACTIVITY_POLL_INTERVAL K_MSEC(500)
 
 enum {
 	INT_FLAGS_INT1,
@@ -48,6 +56,7 @@ static void bmi270_int2_callback(const struct device *dev,
 static void bmi270_thread_cb(const struct device *dev)
 {
 	struct bmi270_data *data = dev->data;
+	const struct bmi270_config *cfg = dev->config;
 	int ret;
 
 	/* INT1 is used for feature interrupts */
@@ -70,8 +79,21 @@ static void bmi270_thread_cb(const struct device *dev)
 		}
 
 		if (data->step_handler != NULL) {
-			if (int_status & BMI270_INT_STATUS_STEP_COUNTER) {
+			if (int_status & cfg->feature->step_cnt_int_bit) {
 				data->step_handler(dev, data->step_trigger);
+			}
+		}
+
+		/*
+		 * Only base/max_fifo route step-activity to a real interrupt
+		 * bit this way. "context" has no interrupt for
+		 * BMI2_ACTIVITY_RECOGNITION at all - its activity_handler is
+		 * instead invoked straight from the FIFO poll worker below,
+		 * so act_recog_en != NULL means this bit is meaningless here.
+		 */
+		if ((data->activity_handler != NULL) && (cfg->feature->act_recog_en == NULL)) {
+			if (int_status & BMI270_INT_STATUS_ACTIVITY) {
+				data->activity_handler(dev, data->activity_trigger);
 			}
 		}
 
@@ -280,6 +302,7 @@ int bmi270_init_interrupts(const struct device *dev)
 static int bmi270_update_int1_map_feat(const struct device *dev)
 {
 	struct bmi270_data *data = dev->data;
+	const struct bmi270_config *cfg = dev->config;
 	uint8_t int1_map_feat = 0;
 	int ret;
 
@@ -288,7 +311,18 @@ static int bmi270_update_int1_map_feat(const struct device *dev)
 	}
 
 	if (data->step_handler != NULL) {
-		int1_map_feat |= BMI270_INT_MAP_STEP_COUNTER;
+		int1_map_feat |= cfg->feature->step_cnt_int_bit;
+	}
+
+	/*
+	 * "context" has no interrupt mapping for BMI2_ACTIVITY_RECOGNITION
+	 * (Bosch's bmi270_context_map_feat_int() only supports step
+	 * counter/detector) - setting this bit there would be meaningless at
+	 * best, or alias onto some unrelated context feature at worst. Only
+	 * base/max_fifo's step-activity guess uses a real interrupt bit.
+	 */
+	if ((data->activity_handler != NULL) && (cfg->feature->act_recog_en == NULL)) {
+		int1_map_feat |= BMI270_INT_MAP_ACTIVITY;
 	}
 
 	ret = bmi270_reg_write(dev, BMI270_REG_INT1_MAP_FEAT, &int1_map_feat, 1);
@@ -396,6 +430,225 @@ static int bmi270_step_cnt_config(const struct device *dev, bool enable)
 	return bmi270_update_int1_map_feat(dev);
 }
 
+/*
+ * base/max_fifo only: the unverified step-activity register guess (see
+ * BMI270_STEP_ACTIVITY_MASK in bmi270.h). Shares the step counter/detector
+ * enable word (page 6, reg 0x32) - read-modify-write so we only ever touch
+ * our own bit.
+ */
+static int bmi270_activity_config_legacy(const struct device *dev, bool enable)
+{
+	const struct bmi270_config *cfg = dev->config;
+	uint16_t step_word;
+	int ret;
+
+	if (cfg->feature->step_cnt_en == NULL) {
+		LOG_ERR("step-activity feature register not defined for this variant");
+		return -ENOTSUP;
+	}
+
+	ret = bmi270_feature_reg_read(dev, cfg->feature->step_cnt_en, &step_word);
+	if (ret < 0) {
+		return ret;
+	}
+
+	step_word &= ~BMI270_STEP_CNT_FEAT_EN_STEP_ACT;
+	if (enable) {
+		step_word |= BMI270_STEP_CNT_FEAT_EN_STEP_ACT;
+	}
+
+	ret = bmi270_feature_reg_write(dev, cfg->feature->step_cnt_en, step_word);
+	if (ret < 0) {
+		return ret;
+	}
+
+	return bmi270_update_int1_map_feat(dev);
+}
+
+/*
+ * FIFO_CONFIG (registers 0x48/0x49) is a plain top-level register, not a
+ * feature-page one - no FEAT_PAGE select needed, unlike
+ * bmi270_feature_reg_write(). Only header mode is toggled here; we
+ * deliberately leave ACC_EN/GYR_EN off so the FIFO only ever fills with the
+ * activity-recognition virtual frames we actually want.
+ */
+static int bmi270_fifo_enable_headers(const struct device *dev, bool enable)
+{
+	uint8_t buf[2] = { 0 };
+
+	if (enable) {
+		buf[1] = BMI270_FIFO_CONFIG_1_HEADER_EN;
+	}
+
+	return bmi270_reg_write(dev, BMI270_REG_FIFO_CONFIG_0, buf, sizeof(buf));
+}
+
+/*
+ * Drains whatever is currently in the FIFO looking for
+ * BMI270_FIFO_HEADER_ACT_RECOG_FRM frames (1 header byte + 6-byte payload:
+ * 4-byte LE timestamp, prev_act, curr_act - per bmi270_context.c's
+ * unpack_act_recog_output()). Caches the latest decoded frame into *data and
+ * invokes activity_handler once per frame found. Stops at the first
+ * "empty"/unrecognized header rather than risk misparsing a partial frame.
+ */
+static int bmi270_fifo_read_act_recog(const struct device *dev)
+{
+	struct bmi270_data *data = dev->data;
+	uint8_t len_buf[2];
+	uint8_t fifo_buf[32];
+	uint16_t fifo_len;
+	uint16_t i = 0;
+	int ret;
+
+	ret = bmi270_reg_read(dev, BMI270_REG_FIFO_LENGTH_0, len_buf, sizeof(len_buf));
+	if (ret < 0) {
+		return ret;
+	}
+
+	fifo_len = sys_get_le16(len_buf) & GENMASK(13, 0);
+	if (fifo_len == 0) {
+		return 0;
+	}
+
+	if (fifo_len > sizeof(fifo_buf)) {
+		fifo_len = sizeof(fifo_buf);
+	}
+
+	ret = bmi270_reg_read(dev, BMI270_REG_FIFO_DATA, fifo_buf, fifo_len);
+	if (ret < 0) {
+		return ret;
+	}
+
+	while (i < fifo_len) {
+		uint8_t header = fifo_buf[i];
+
+		if (header == BMI270_FIFO_HEADER_EMPTY_FRM) {
+			break;
+		}
+
+		if (header != BMI270_FIFO_HEADER_ACT_RECOG_FRM) {
+			/* Unexpected frame type - bail rather than misparse. */
+			break;
+		}
+
+		if ((i + BMI270_FIFO_ACT_RECOG_FRM_LEN) > fifo_len) {
+			/* Partial frame; the rest will show up next poll. */
+			break;
+		}
+
+		k_mutex_lock(&data->trigger_mutex, K_FOREVER);
+		data->activity_timestamp = sys_get_le32(&fifo_buf[i + 1]);
+		data->activity_prev = (enum bmi270_activity_recog)fifo_buf[i + 5];
+		data->activity_curr = (enum bmi270_activity_recog)fifo_buf[i + 6];
+		data->activity_data_valid = true;
+		k_mutex_unlock(&data->trigger_mutex);
+
+		if (data->activity_handler != NULL) {
+			data->activity_handler(dev, data->activity_trigger);
+		}
+
+		i += BMI270_FIFO_ACT_RECOG_FRM_LEN;
+	}
+
+	return 0;
+}
+
+static void bmi270_activity_poll_work_cb(struct k_work *work)
+{
+	struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+	struct bmi270_data *data = CONTAINER_OF(dwork, struct bmi270_data,
+						activity_poll_work);
+	int ret;
+
+	ret = bmi270_fifo_read_act_recog(data->dev);
+	if (ret < 0) {
+		LOG_ERR("activity recognition FIFO read failed (%d)", ret);
+	}
+
+	k_work_reschedule(dwork, BMI270_ACTIVITY_POLL_INTERVAL);
+}
+
+/*
+ * "context" only: the real BMI2_ACTIVITY_RECOGNITION feature. No interrupt
+ * exists for it, so enabling it means (a) flipping its feature-enable bit,
+ * (b) turning on FIFO header mode so its virtual frames are identifiable,
+ * and (c) starting a periodic poll of the FIFO in the background.
+ */
+static int bmi270_activity_config_context(const struct device *dev, bool enable)
+{
+	const struct bmi270_config *cfg = dev->config;
+	struct bmi270_data *data = dev->data;
+	uint16_t en_word;
+	int ret;
+
+	ret = bmi270_feature_reg_read(dev, cfg->feature->act_recog_en, &en_word);
+	if (ret < 0) {
+		return ret;
+	}
+
+	en_word &= ~BMI270_CONTEXT_ACT_RECOG_EN_MASK;
+	if (enable) {
+		en_word |= BMI270_CONTEXT_ACT_RECOG_EN_MASK;
+	}
+
+	ret = bmi270_feature_reg_write(dev, cfg->feature->act_recog_en, en_word);
+	if (ret < 0) {
+		return ret;
+	}
+
+	ret = bmi270_fifo_enable_headers(dev, enable);
+	if (ret < 0) {
+		return ret;
+	}
+
+	if (enable) {
+		data->activity_data_valid = false;
+		k_work_init_delayable(&data->activity_poll_work, bmi270_activity_poll_work_cb);
+		k_work_reschedule(&data->activity_poll_work, BMI270_ACTIVITY_POLL_INTERVAL);
+	} else {
+		k_work_cancel_delayable(&data->activity_poll_work);
+	}
+
+	return 0;
+}
+
+static int bmi270_activity_config(const struct device *dev, bool enable)
+{
+	const struct bmi270_config *cfg = dev->config;
+
+	if (cfg->feature->act_recog_en != NULL) {
+		return bmi270_activity_config_context(dev, enable);
+	}
+
+	return bmi270_activity_config_legacy(dev, enable);
+}
+
+int bmi270_activity_recognition_get(const struct device *dev,
+				    enum bmi270_activity_recog *curr,
+				    enum bmi270_activity_recog *prev,
+				    uint32_t *timestamp)
+{
+	struct bmi270_data *data = dev->data;
+
+	if (!data->activity_data_valid) {
+		return -EAGAIN;
+	}
+
+	k_mutex_lock(&data->trigger_mutex, K_FOREVER);
+	if (curr != NULL) {
+		*curr = data->activity_curr;
+	}
+	if (prev != NULL) {
+		*prev = data->activity_prev;
+	}
+	if (timestamp != NULL) {
+		*timestamp = data->activity_timestamp;
+	}
+	k_mutex_unlock(&data->trigger_mutex);
+
+	return 0;
+}
+
 static int bmi270_drdy_config(const struct device *dev, bool enable)
 {
 	int ret;
@@ -455,6 +708,17 @@ int bmi270_trigger_set(const struct device *dev,
 		data->step_trigger = trig;
 		k_mutex_unlock(&data->trigger_mutex);
 		return bmi270_step_cnt_config(dev, handler != NULL);
+
+	case BMI270_SENSOR_TRIG_ACTIVITY:
+		if (!cfg->int1.port) {
+			return -ENOTSUP;
+		}
+
+		k_mutex_lock(&data->trigger_mutex, K_FOREVER);
+		data->activity_handler = handler;
+		data->activity_trigger = trig;
+		k_mutex_unlock(&data->trigger_mutex);
+		return bmi270_activity_config(dev, handler != NULL);
 	default:
 		return -ENOTSUP;
 	}

@@ -46,6 +46,42 @@ static void step_trigger_handler(const struct device *dev, const struct sensor_t
 	LOG_INF("Step count: %u", steps);
 }
 
+/*
+ * Fires on the BMI270 "context" blob's real BMI2_ACTIVITY_RECOGNITION
+ * classifier every time the driver drains a new activity frame out of the
+ * FIFO (see bmi270_activity_poll_work_cb() in bmi270_trigger.c - there is no
+ * hardware interrupt for this feature, so it's polled internally on a
+ * timer). curr/prev report the classification right after/before the
+ * change; timestamp is the sensor's own internal clock, not wall time.
+ */
+static void activity_trigger_handler(const struct device *dev, const struct sensor_trigger *trig)
+{
+	/* Bosch's enum bmi2_act_recog_type values 0-6; see bmi270.h. */
+	static const char *const activity_name[] = {
+		[BMI270_ACTIVITY_OTHERS] = "OTHERS",
+		[BMI270_ACTIVITY_STILL] = "STILL",
+		[BMI270_ACTIVITY_WALKING] = "WALKING",
+		[BMI270_ACTIVITY_RUNNING] = "RUNNING",
+		[BMI270_ACTIVITY_ON_BICYCLE] = "ON_BICYCLE",
+		[BMI270_ACTIVITY_IN_VEHICLE] = "IN_VEHICLE",
+		[BMI270_ACTIVITY_TILTED] = "TILTED",
+	};
+	enum bmi270_activity_recog curr, prev;
+	uint32_t timestamp;
+	int ret;
+
+	ARG_UNUSED(trig);
+
+	ret = bmi270_activity_recognition_get(dev, &curr, &prev, &timestamp);
+	if (ret != 0) {
+		LOG_ERR("Failed to read activity recognition (%d)", ret);
+		return;
+	}
+
+	LOG_INF("Activity changed: %s -> %s (sensor time %u)",
+		activity_name[prev], activity_name[curr], timestamp);
+}
+
 int main(void)
 {
 	const struct device *const dev = DEVICE_DT_GET_ONE(bosch_bmi270);
@@ -53,6 +89,10 @@ int main(void)
 	struct sensor_value step_wm;
 	struct sensor_trigger step_trig = {
 		.type = BMI270_SENSOR_TRIG_STEP,
+		.chan = SENSOR_CHAN_ALL,
+	};
+	struct sensor_trigger activity_trig = {
+		.type = BMI270_SENSOR_TRIG_ACTIVITY,
 		.chan = SENSOR_CHAN_ALL,
 	};
 	int ret;
@@ -121,6 +161,11 @@ int main(void)
 	ret = sensor_trigger_set(dev, &step_trig, step_trigger_handler);
 	if (ret != 0) {
 		LOG_ERR("Failed to set step counter trigger (%d)", ret);
+	}
+
+	ret = sensor_trigger_set(dev, &activity_trig, activity_trigger_handler);
+	if (ret != 0) {
+		LOG_ERR("Failed to set step activity trigger (%d)", ret);
 	}
 
 	k_sleep(K_FOREVER);
